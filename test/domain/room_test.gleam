@@ -1,6 +1,7 @@
 import gleeunit/should
 import neural_link/domain/room.{Active, Closed, Closing, Open}
 import neural_link/domain/participant
+import neural_link/domain/id.{ParticipantId}
 
 pub fn new_creates_room_with_open_status_test() {
   let r = room.new("r1", "Test Room")
@@ -23,7 +24,7 @@ pub fn remove_participant_decreases_count_test() {
   let r = room.new("r1", "Test Room")
   let p = participant.new("p1", "Alice", participant.Member)
   let r2 = room.add_participant(r, p)
-  let r3 = room.remove_participant(r2, participant.ParticipantId("p1"))
+  let r3 = room.remove_participant(r2, ParticipantId("p1"))
   room.participant_count(r3) |> should.equal(0)
 }
 

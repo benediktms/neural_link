@@ -1,8 +1,5 @@
 import birl.{type Time}
-
-pub type ParticipantId {
-  ParticipantId(String)
-}
+import neural_link/domain/id.{type ParticipantId, ParticipantId}
 
 pub type ParticipantRole {
   Owner

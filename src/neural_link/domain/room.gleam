@@ -1,11 +1,8 @@
 import gleam/option.{type Option, None}
 import gleam/list
 import birl.{type Time}
-import neural_link/domain/participant.{type Participant, type ParticipantId, ParticipantId}
-
-pub type RoomId {
-  RoomId(String)
-}
+import neural_link/domain/id.{type ParticipantId, type RoomId, ParticipantId, RoomId}
+import neural_link/domain/participant.{type Participant}
 
 pub type RoomStatus {
   Open
