@@ -1,5 +1,7 @@
-import gleam/io
+import gleam/erlang/process
+import neural_link/runtime/supervisor as runtime_supervisor
 
 pub fn main() -> Nil {
-  io.println("Hello from neural_link!")
+  let assert Ok(_supervisor) = runtime_supervisor.start()
+  process.sleep_forever()
 }
