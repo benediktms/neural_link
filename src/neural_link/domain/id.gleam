@@ -1,5 +1,5 @@
-import gleam/crypto
 import gleam/bit_array
+import gleam/crypto
 import gleam/string
 
 /// All domain ID types — every domain module imports from here

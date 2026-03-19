@@ -2,8 +2,7 @@ import birl.{type Time}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import neural_link/domain/id.{
-  type MessageId, type ParticipantId, type RoomId, type ThreadId,
-  new_message_id,
+  type MessageId, type ParticipantId, type RoomId, type ThreadId, new_message_id,
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +110,10 @@ pub fn new_message(
 }
 
 /// Construct a new Receipt in Pending state.
-pub fn new_receipt(message_id: MessageId, participant_id: ParticipantId) -> Receipt {
+pub fn new_receipt(
+  message_id: MessageId,
+  participant_id: ParticipantId,
+) -> Receipt {
   Receipt(
     message_id: message_id,
     participant_id: participant_id,

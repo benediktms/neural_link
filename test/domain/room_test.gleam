@@ -1,7 +1,7 @@
 import gleeunit/should
-import neural_link/domain/room.{Active, Closed, Closing, Open}
-import neural_link/domain/participant
 import neural_link/domain/id.{ParticipantId}
+import neural_link/domain/participant
+import neural_link/domain/room.{Active, Closed, Closing, Open}
 
 pub fn new_creates_room_with_open_status_test() {
   let r = room.new("r1", "Test Room")

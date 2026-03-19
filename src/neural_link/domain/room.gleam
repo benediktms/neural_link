@@ -1,7 +1,9 @@
-import gleam/option.{type Option, None, Some}
-import gleam/list
 import birl.{type Time}
-import neural_link/domain/id.{type ParticipantId, type RoomId, ParticipantId, RoomId}
+import gleam/list
+import gleam/option.{type Option, None, Some}
+import neural_link/domain/id.{
+  type ParticipantId, type RoomId, ParticipantId, RoomId,
+}
 import neural_link/domain/participant.{type Participant}
 
 pub type RoomStatus {
@@ -91,10 +93,13 @@ pub fn add_participant(room: Room, p: Participant) -> Room {
 
 pub fn remove_participant(room: Room, id: ParticipantId) -> Room {
   let ParticipantId(target) = id
-  Room(..room, participants: list.filter(room.participants, fn(p) {
-    let ParticipantId(pid) = p.id
-    pid != target
-  }))
+  Room(
+    ..room,
+    participants: list.filter(room.participants, fn(p) {
+      let ParticipantId(pid) = p.id
+      pid != target
+    }),
+  )
 }
 
 pub fn participant_count(room: Room) -> Int {

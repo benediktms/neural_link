@@ -1,5 +1,5 @@
-import gleeunit/should
 import gleam/string
+import gleeunit/should
 import neural_link/domain/id
 
 pub fn generate_starts_with_prefix_test() {
