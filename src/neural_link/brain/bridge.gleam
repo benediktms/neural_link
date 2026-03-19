@@ -1,11 +1,10 @@
 import birl
 import gleam/int
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import neural_link/brain/client
-import neural_link/brain/types.{
-  type BrainConfig, type BrainResult, CommandFailed,
-}
+import neural_link/brain/types.{type BrainConfig, type BrainResult}
 import neural_link/domain/id
 import neural_link/domain/message.{
   type Message, Blocker, Decision, Durable, Handoff, ReviewResult, Summary,
@@ -19,7 +18,7 @@ pub fn on_room_open(config: BrainConfig, room: Room) -> BrainResult(String) {
   let room_id = id.room_id_to_string(room.id)
   let title = "Room opened: " <> room.title
   let text = build_open_text(room_id, room)
-  client.create_record(config, title, text, ["neural-link", "room-open"])
+  client.save_snapshot(config, title, text, ["neural-link", "room-open"])
 }
 
 pub fn on_room_close(
@@ -31,7 +30,7 @@ pub fn on_room_close(
   let room_id = id.room_id_to_string(room.id)
   let title = "Room closed: " <> room.title
   let text = build_close_text(room_id, room, message_count, duration_ms)
-  client.create_record(config, title, text, ["neural-link", "room-close"])
+  client.save_snapshot(config, title, text, ["neural-link", "room-close"])
 }
 
 fn build_open_text(room_id: String, room: Room) -> String {
@@ -95,6 +94,21 @@ fn option_to_string(opt: Option(String), default: String) -> String {
   option.unwrap(opt, default)
 }
 
+/// Persist the full conversation as a brain artifact on room close.
+/// Returns the record ID on success. Called synchronously by the handler.
+pub fn on_room_close_with_artifact(
+  config: BrainConfig,
+  room: Room,
+  content: String,
+) -> BrainResult(String) {
+  let room_id = id.room_id_to_string(room.id)
+  let title = "Conversation: " <> room.title
+  let room_tags = room.tags
+  let base_tags = ["neural-link", "conversation", room_id]
+  let tags = list.append(base_tags, room_tags)
+  client.create_artifact(config, title, content, "conversation", tags)
+}
+
 // ---------------------------------------------------------------------------
 // Message bridge
 // ---------------------------------------------------------------------------
@@ -105,7 +119,7 @@ fn option_to_string(opt: Option(String), default: String) -> String {
 pub fn on_message(config: BrainConfig, msg: Message) -> BrainResult(String) {
   let should_persist = is_durable(msg.kind) || msg.persist_hint == Durable
   case should_persist {
-    False -> Error(CommandFailed("Message not durable — skipped"))
+    False -> Ok("skipped")
     True -> persist_message(config, msg)
   }
 }
@@ -129,7 +143,7 @@ fn persist_message(config: BrainConfig, msg: Message) -> BrainResult(String) {
         _ -> "message"
       }
       let tags = ["neural-link", tag, room_id]
-      client.create_record(config, title, text, tags)
+      client.save_snapshot(config, title, text, tags)
     }
   }
 }

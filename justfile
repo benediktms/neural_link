@@ -1,7 +1,7 @@
 # neural_link — multi-agent coordination service
 # ──────────────────────────────────────────────
 
-default_port := "8080"
+default_port := "9961"
 bin_dir := env("HOME") / "bin"
 
 default:
@@ -16,13 +16,19 @@ setup:
 [group('setup')]
 install: build
     gleam export erlang-shipment
-    ln -sf {{justfile_directory()}}/build/erlang-shipment/entrypoint.sh {{bin_dir}}/nlk
-    ln -sf {{justfile_directory()}}/build/erlang-shipment/entrypoint.sh {{bin_dir}}/neural_link
-    @echo "Installed: {{bin_dir}}/nlk → entrypoint.sh"
-    @echo "Installed: {{bin_dir}}/neural_link → entrypoint.sh"
+    rm -f {{bin_dir}}/nlk {{bin_dir}}/neural_link
+    printf '#!/bin/sh\nexec %s/build/erlang-shipment/entrypoint.sh run "$@"\n' "{{justfile_directory()}}" > {{bin_dir}}/nlk
+    chmod +x {{bin_dir}}/nlk
+    cp {{bin_dir}}/nlk {{bin_dir}}/neural_link
+    @echo "Installed: {{bin_dir}}/nlk"
+    @echo "Installed: {{bin_dir}}/neural_link"
+    claude mcp remove neural_link 2>/dev/null || true
+    claude mcp add -s user -t http neural_link http://localhost:{{default_port}}/mcp
+    @echo "Registered: neural_link MCP (http://localhost:{{default_port}}/mcp)"
 
 [group('setup')]
 uninstall:
+    claude mcp remove neural_link 2>/dev/null || true
     rm -f {{bin_dir}}/nlk {{bin_dir}}/neural_link
     @echo "Removed nlk and neural_link from {{bin_dir}}"
 

@@ -18,6 +18,7 @@ import neural_link/domain/id.{
 import neural_link/domain/message
 import neural_link/domain/participant as participant_domain
 import neural_link/domain/room as domain_room
+import neural_link/domain/summary as extraction
 import neural_link/domain/wait
 import neural_link/mcp/transport
 import neural_link/runtime/inbox as inbox_mod
@@ -404,18 +405,10 @@ fn handle_thread_summarize(
     get_optional_string_param(params, "thread_id")
     |> option.map(ThreadId)
   use room_subject <- result.try(registry_mod.get_room(registry, room_id))
+  let room_state = room_mod.get_state(room_subject)
   let messages = room_mod.get_messages(room_subject, thread_id_opt)
-  let count = list.length(messages)
-  let summary =
-    messages
-    |> list.map(fn(m) { m.summary })
-    |> string.join(" | ")
-  Ok(
-    json.object([
-      #("summary", json.string(summary)),
-      #("message_count", json.int(count)),
-    ]),
-  )
+  let result = extraction.extract(room_state, thread_id_opt, messages)
+  Ok(extraction.encode(result))
 }
 
 // ---------------------------------------------------------------------------
@@ -440,8 +433,12 @@ fn handle_room_close(
   list.each(room_state.participants, fn(p) {
     presence_mod.unregister(presence, p.id, room_id)
   })
-  // Fire-and-forget brain bridge using per-room brains
   let closed_room = domain_room.close_with_resolution(room_state, resolution)
+  // Extract structured conversation data
+  let conv = extraction.extract(closed_room, None, messages)
+  // Persist conversation artifact synchronously (need the record ID)
+  let conv = persist_conversation_artifact(room_state.brains, closed_room, conv)
+  // Fire-and-forget metadata record (lightweight index)
   let message_count = list.length(messages)
   let duration_ms =
     birl.to_unix_milli(birl.utc_now())
@@ -453,8 +450,50 @@ fn handle_room_close(
     json.object([
       #("room_id", json.string(room_id)),
       #("status", json.string("closed")),
+      ..extraction_fields(conv)
     ]),
   )
+}
+
+fn persist_conversation_artifact(
+  brains: List(String),
+  room: domain_room.Room,
+  conv: extraction.ConversationExtraction,
+) -> extraction.ConversationExtraction {
+  // Try each brain synchronously until one succeeds
+  case brains {
+    [] -> conv
+    [brain_name, ..rest] -> {
+      let cfg = types.BrainConfig(brain_name: brain_name)
+      case bridge.on_room_close_with_artifact(cfg, room, conv.content) {
+        Ok(record_id) -> extraction.set_artifact_id(conv, record_id)
+        Error(err) -> {
+          logging.log(
+            logging.Warning,
+            "brain artifact failed: " <> brain_error_to_string(err),
+          )
+          persist_conversation_artifact(rest, room, conv)
+        }
+      }
+    }
+  }
+}
+
+fn extraction_fields(
+  conv: extraction.ConversationExtraction,
+) -> List(#(String, json.Json)) {
+  let artifact = case conv.artifact_record_id {
+    Some(id) -> json.string(id)
+    None -> json.null()
+  }
+  [
+    #("message_count", json.int(conv.message_count)),
+    #("participant_ids", json.array(conv.participant_ids, json.string)),
+    #("decisions", json.array(conv.decisions, json.string)),
+    #("open_questions", json.array(conv.open_questions, json.string)),
+    #("unresolved_blockers", json.array(conv.unresolved_blockers, json.string)),
+    #("artifact_record_id", artifact),
+  ]
 }
 
 // ---------------------------------------------------------------------------

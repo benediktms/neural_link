@@ -238,7 +238,7 @@ fn wait_for() -> protocol.ToolDefinition {
 fn thread_summarize() -> protocol.ToolDefinition {
   ToolDefinition(
     name: "thread_summarize",
-    description: "Summarize messages in a room or thread",
+    description: "Get structured coordination status for a room or thread. Returns decisions, open questions, unresolved blockers, and message count. Read-only, no persistence.",
     properties: [
       ToolProperty(
         name: "room_id",
@@ -259,7 +259,7 @@ fn thread_summarize() -> protocol.ToolDefinition {
 fn room_close() -> protocol.ToolDefinition {
   ToolDefinition(
     name: "room_close",
-    description: "Close a coordination room",
+    description: "Close a coordination room. Persists the full conversation as a brain artifact and returns structured extraction (decisions, open questions, unresolved blockers, artifact record ID).",
     properties: [
       ToolProperty(
         name: "room_id",

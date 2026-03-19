@@ -25,19 +25,17 @@ pub fn start_detached(port: Int) -> Result(String, String) {
   let cookie = load_or_create_cookie()
   let port_str = int.to_string(port)
   let shipment = find_shipment_path()
+  let erl_flags = "-detached -name " <> node_name <> " -setcookie " <> cookie
   let cmd =
-    "NEURAL_LINK_PORT=" <> port_str <> " " <> shipment <> " start --foreground"
-
-  // Wrap in erl -detached via the run_erl pattern:
-  // We use the entrypoint.sh but inject BEAM flags for named node + detached
-  let detached_cmd =
-    "ERL_FLAGS='-detached -name "
-    <> node_name
-    <> " -setcookie "
-    <> cookie
-    <> "' "
-    <> cmd
-  exec_command(detached_cmd)
+    "/usr/bin/env"
+    <> " ERL_FLAGS='"
+    <> erl_flags
+    <> "' NEURAL_LINK_PORT="
+    <> port_str
+    <> " /bin/sh "
+    <> shipment
+    <> " run start --foreground"
+  exec_command(cmd)
 }
 
 /// Stop the remote neural_link node via RPC
@@ -76,17 +74,19 @@ fn generate_cookie() -> String {
 }
 
 fn find_shipment_path() -> String {
-  case get_cwd() {
-    Ok(cwd) -> cwd <> "/build/erlang-shipment/entrypoint.sh"
+  // Derive from the running BEAM's code path — the ebin dir is a sibling
+  // of entrypoint.sh under build/erlang-shipment/
+  case shipment_dir() {
+    Ok(dir) -> dir <> "/entrypoint.sh"
     Error(_) -> "build/erlang-shipment/entrypoint.sh"
   }
 }
 
+@external(erlang, "neural_link_ffi", "shipment_dir")
+fn shipment_dir() -> Result(String, String)
+
 @external(erlang, "neural_link_ffi", "exec_command")
 fn exec_command(cmd: String) -> Result(String, String)
-
-@external(erlang, "neural_link_ffi", "get_cwd")
-fn get_cwd() -> Result(String, String)
 
 @external(erlang, "neural_link_ffi", "get_home_dir")
 fn get_home_dir() -> Result(String, String)

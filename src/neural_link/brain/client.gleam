@@ -1,7 +1,11 @@
+import gleam/dynamic/decode
+import gleam/json
+import gleam/list
 import gleam/result
 import gleam/string
 import neural_link/brain/types.{
-  type BrainConfig, type BrainResult, BrainConfig, CommandFailed, Timeout,
+  type BrainConfig, type BrainResult, BrainConfig, CommandFailed, ParseError,
+  Timeout,
 }
 
 /// Create a new brain client config
@@ -13,9 +17,13 @@ pub fn new(brain_name: String) -> BrainConfig {
 @external(erlang, "neural_link_ffi", "exec_command")
 fn exec_command(command: String) -> Result(String, String)
 
+/// Execute a shell command with content piped via stdin
+@external(erlang, "neural_link_ffi", "exec_command_stdin")
+fn exec_command_stdin(command: String, stdin: String) -> Result(String, String)
+
 /// Run a brain CLI command, handling errors
-fn run_brain_command(config: BrainConfig, args: String) -> BrainResult(String) {
-  let command = "brain --brain " <> config.brain_name <> " " <> args
+fn run_command(args: String) -> BrainResult(String) {
+  let command = "brain " <> args
   case exec_command(command) {
     Ok(output) -> Ok(string.trim(output))
     Error("timeout") -> Error(Timeout)
@@ -23,86 +31,82 @@ fn run_brain_command(config: BrainConfig, args: String) -> BrainResult(String) {
   }
 }
 
-/// Create a record in brain
-/// Returns the record ID on success
-pub fn create_record(
-  config: BrainConfig,
-  title: String,
-  text: String,
-  tags: List(String),
-) -> BrainResult(String) {
-  let tags_arg = case tags {
-    [] -> ""
-    _ -> " --tag " <> string.join(tags, " --tag ")
+/// Run a brain CLI command with content piped via stdin
+fn run_command_stdin(args: String, content: String) -> BrainResult(String) {
+  let command = "brain " <> args
+  case exec_command_stdin(command, content) {
+    Ok(output) -> Ok(string.trim(output))
+    Error("timeout") -> Error(Timeout)
+    Error(output) -> Error(CommandFailed(string.trim(output)))
   }
-  let args =
-    "records create"
-    <> " --title "
-    <> shell_quote(title)
-    <> " --text "
-    <> shell_quote(text)
-    <> tags_arg
-    <> " --json"
-  run_brain_command(config, args)
 }
 
-/// Create an artifact in brain
-/// Returns the record ID on success
+fn build_tags(tags: List(String)) -> String {
+  case tags {
+    [] -> ""
+    _ -> " --tag " <> string.join(list.map(tags, shell_quote), " --tag ")
+  }
+}
+
+/// Extract record_id from brain CLI JSON output.
+/// Output format: {"record_id": "...", "content_hash": "...", "size": ...}
+fn parse_record_id(json_output: String) -> BrainResult(String) {
+  let decoder = decode.field("record_id", decode.string, decode.success)
+  case json.parse(json_output, decoder) {
+    Ok(record_id) -> Ok(record_id)
+    Error(_) ->
+      Error(ParseError("failed to parse record_id from: " <> json_output))
+  }
+}
+
+/// Create an artifact in brain via `brain artifacts create --stdin`
+/// Returns the record ID on success.
 pub fn create_artifact(
-  config: BrainConfig,
+  _config: BrainConfig,
   title: String,
-  text: String,
+  content: String,
   kind: String,
   tags: List(String),
 ) -> BrainResult(String) {
-  let tags_arg = case tags {
-    [] -> ""
-    _ -> " --tag " <> string.join(tags, " --tag ")
-  }
   let args =
-    "records create-artifact"
+    "artifacts create"
     <> " --title "
     <> shell_quote(title)
-    <> " --text "
-    <> shell_quote(text)
     <> " --kind "
     <> shell_quote(kind)
-    <> tags_arg
-    <> " --json"
-  run_brain_command(config, args)
+    <> build_tags(tags)
+    <> " --stdin --json"
+  run_command_stdin(args, content)
+  |> result.try(parse_record_id)
+}
+
+/// Save a snapshot in brain via `brain snapshots save --stdin`
+/// Returns the record ID on success.
+pub fn save_snapshot(
+  _config: BrainConfig,
+  title: String,
+  content: String,
+  tags: List(String),
+) -> BrainResult(String) {
+  let args =
+    "snapshots save"
+    <> " --title "
+    <> shell_quote(title)
+    <> build_tags(tags)
+    <> " --stdin --json"
+  run_command_stdin(args, content)
+  |> result.try(parse_record_id)
 }
 
 /// Add a comment to a brain task
 pub fn add_task_comment(
-  config: BrainConfig,
+  _config: BrainConfig,
   task_id: String,
   body: String,
 ) -> BrainResult(Nil) {
   let args = "tasks comment " <> task_id <> " " <> shell_quote(body)
-  run_brain_command(config, args)
+  run_command(args)
   |> result.map(fn(_) { Nil })
-}
-
-/// Save a snapshot record
-pub fn save_snapshot(
-  config: BrainConfig,
-  title: String,
-  text: String,
-  tags: List(String),
-) -> BrainResult(String) {
-  let tags_arg = case tags {
-    [] -> ""
-    _ -> " --tag " <> string.join(tags, " --tag ")
-  }
-  let args =
-    "records save-snapshot"
-    <> " --title "
-    <> shell_quote(title)
-    <> " --text "
-    <> shell_quote(text)
-    <> tags_arg
-    <> " --json"
-  run_brain_command(config, args)
 }
 
 /// Shell-escape a string argument (wrap in single quotes, escape internal quotes)

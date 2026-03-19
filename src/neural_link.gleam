@@ -7,17 +7,36 @@ import neural_link/cli/stop
 pub fn main() -> Nil {
   case argv.load().arguments {
     ["start", ..flags] -> start.run(flags)
-    ["stop"] -> stop.run()
-    ["docs", ..args] -> docs.run(args)
-    ["version"] -> io.println("neural_link 0.1.0")
-    ["help"] | ["--help"] | ["-h"] -> print_usage()
-    [] -> print_usage()
+    ["stop"] -> {
+      stop.run()
+      halt(0)
+    }
+    ["docs", ..args] -> {
+      docs.run(args)
+      halt(0)
+    }
+    ["version"] -> {
+      io.println("neural_link 0.1.0")
+      halt(0)
+    }
+    ["help"] | ["--help"] | ["-h"] -> {
+      print_usage()
+      halt(0)
+    }
+    [] -> {
+      print_usage()
+      halt(0)
+    }
     [cmd, ..] -> {
       io.println_error("Unknown command: " <> cmd)
       print_usage()
+      halt(1)
     }
   }
 }
+
+@external(erlang, "neural_link_ffi", "halt")
+fn halt(code: Int) -> Nil
 
 fn print_usage() -> Nil {
   io.println(

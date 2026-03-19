@@ -20,8 +20,8 @@ pub fn load_port() -> Int {
     Ok(port_str) ->
       case int.parse(port_str) {
         Ok(port) -> port
-        Error(_) -> 8080
+        Error(_) -> 9961
       }
-    Error(_) -> 8080
+    Error(_) -> 9961
   }
 }
