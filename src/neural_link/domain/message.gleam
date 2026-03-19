@@ -76,6 +76,22 @@ pub type Receipt {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Convert a MessageKind to its string representation.
+pub fn kind_to_string(kind: MessageKind) -> String {
+  case kind {
+    Question -> "question"
+    Answer -> "answer"
+    Finding -> "finding"
+    Handoff -> "handoff"
+    Blocker -> "blocker"
+    Decision -> "decision"
+    ReviewRequest -> "review_request"
+    ReviewResult -> "review_result"
+    ArtifactRef -> "artifact_ref"
+    Summary -> "summary"
+  }
+}
+
 /// True for message kinds that carry durable collective memory.
 pub fn is_durable(kind: MessageKind) -> Bool {
   case kind {
@@ -99,7 +115,7 @@ pub fn new_message(
     from: from,
     to: to,
     kind: kind,
-    created_at: birl.now(),
+    created_at: birl.utc_now(),
     sequence: 0,
     requires_ack: False,
     persist_hint: Ephemeral,
@@ -118,7 +134,7 @@ pub fn new_receipt(
     message_id: message_id,
     participant_id: participant_id,
     status: Pending,
-    created_at: birl.now(),
+    created_at: birl.utc_now(),
     acked_at: None,
   )
 }
@@ -127,7 +143,7 @@ pub fn new_receipt(
 pub fn ack_receipt(receipt: Receipt) -> Receipt {
   case receipt.status {
     Acked -> receipt
-    Pending -> Receipt(..receipt, status: Acked, acked_at: Some(birl.now()))
+    Pending -> Receipt(..receipt, status: Acked, acked_at: Some(birl.utc_now()))
   }
 }
 

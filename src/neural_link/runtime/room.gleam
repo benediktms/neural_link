@@ -12,15 +12,10 @@ import neural_link/domain/message.{
 }
 import neural_link/domain/participant.{type Participant}
 import neural_link/domain/room.{type Room, type RoomResolution}
-import neural_link/domain/wait.{type WaitFilter}
 
 // ---------------------------------------------------------------------------
 // Internal state types
 // ---------------------------------------------------------------------------
-
-type PendingWait {
-  PendingWait(wait: wait.Wait, reply: Subject(Result(Message, String)))
-}
 
 type RoomState {
   RoomState(
@@ -28,7 +23,6 @@ type RoomState {
     messages: List(Message),
     receipts: Dict(String, List(Receipt)),
     sequence: Int,
-    pending_waits: List(PendingWait),
     max_messages: Int,
   )
 }
@@ -61,15 +55,6 @@ pub type RoomMessage {
     reply: Subject(Result(Nil, String)),
   )
 
-  // Wait
-  RegisterWait(
-    participant_id: ParticipantId,
-    filter: WaitFilter,
-    since_sequence: Int,
-    timeout_ms: Int,
-    reply: Subject(Result(Message, String)),
-  )
-
   // Query
   GetMessages(thread_id: Option(ThreadId), reply: Subject(List(Message)))
 
@@ -90,7 +75,6 @@ pub fn start(room_data: Room) -> actor.StartResult(Subject(RoomMessage)) {
       messages: [],
       receipts: dict.new(),
       sequence: 0,
-      pending_waits: [],
       max_messages: 1000,
     )
   actor.new(state)
@@ -190,14 +174,6 @@ fn handle_message(
             False -> updated_messages
           }
 
-          // Fulfill matching pending waits
-          let #(fulfilled, remaining_waits) =
-            list.partition(state.pending_waits, fn(pw) {
-              msg.sequence > pw.wait.since_sequence
-              && wait.matches_filter(pw.wait.filter, msg.kind, msg.from)
-            })
-          list.each(fulfilled, fn(pw) { actor.send(pw.reply, Ok(msg)) })
-
           actor.send(reply, Ok(msg))
           actor.continue(
             RoomState(
@@ -205,7 +181,6 @@ fn handle_message(
               messages: bounded_messages,
               receipts: updated_receipts,
               sequence: new_seq,
-              pending_waits: remaining_waits,
             ),
           )
         }
@@ -256,36 +231,6 @@ fn handle_message(
     }
 
     // -----------------------------------------------------------------------
-    RegisterWait(participant_id, filter, since_sequence, timeout_ms, reply) -> {
-      // Check existing messages for an immediate match
-      let existing_match =
-        list.find(list.reverse(state.messages), fn(msg) {
-          msg.sequence > since_sequence
-          && wait.matches_filter(filter, msg.kind, msg.from)
-        })
-      case existing_match {
-        Ok(msg) -> {
-          actor.send(reply, Ok(msg))
-          actor.continue(state)
-        }
-        Error(_) -> {
-          let w =
-            wait.new_wait(
-              participant_id,
-              state.room.id,
-              filter,
-              since_sequence,
-              timeout_ms,
-            )
-          let pw = PendingWait(wait: w, reply: reply)
-          actor.continue(
-            RoomState(..state, pending_waits: [pw, ..state.pending_waits]),
-          )
-        }
-      }
-    }
-
-    // -----------------------------------------------------------------------
     GetMessages(thread_id, reply) -> {
       let filtered = case thread_id {
         None -> state.messages
@@ -310,14 +255,8 @@ fn handle_message(
         }
         False -> {
           let closed_room = room.close_with_resolution(state.room, resolution)
-          // Fulfill pending waits with error
-          list.each(state.pending_waits, fn(pw) {
-            actor.send(pw.reply, Error("Room closed"))
-          })
           actor.send(reply, Ok(Nil))
-          actor.continue(
-            RoomState(..state, room: closed_room, pending_waits: []),
-          )
+          actor.continue(RoomState(..state, room: closed_room))
         }
       }
     }
@@ -353,6 +292,20 @@ pub fn send_msg(
 ) -> Result(Message, String) {
   actor.call(room, 5000, fn(reply) {
     SendMsg(from, to, kind, summary, None, None, [], reply)
+  })
+}
+
+pub fn send_msg_full(
+  room: Subject(RoomMessage),
+  from: ParticipantId,
+  to: List(ParticipantId),
+  kind: MessageKind,
+  summary: String,
+  body: Option(String),
+  thread_id: Option(ThreadId),
+) -> Result(Message, String) {
+  actor.call(room, 5000, fn(reply) {
+    SendMsg(from, to, kind, summary, body, thread_id, [], reply)
   })
 }
 

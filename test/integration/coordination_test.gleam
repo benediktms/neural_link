@@ -14,7 +14,15 @@ pub fn full_coordination_workflow_test() {
   let reg = started.data
 
   // 2. Create room
-  let assert Ok(room_data) = registry.create_room(reg, "Test Coordination Room")
+  let assert Ok(room_data) =
+    registry.create_room(
+      reg,
+      "Test Coordination Room",
+      option.None,
+      option.None,
+      [],
+      [],
+    )
   let id.RoomId(room_id) = room_data.id
 
   // 3. Get room subject
@@ -96,7 +104,15 @@ pub fn full_coordination_workflow_test() {
 pub fn broadcast_sends_to_all_except_sender_test() {
   let assert Ok(started) = registry.start()
   let reg = started.data
-  let assert Ok(room_data) = registry.create_room(reg, "Broadcast Test")
+  let assert Ok(room_data) =
+    registry.create_room(
+      reg,
+      "Broadcast Test",
+      option.None,
+      option.None,
+      [],
+      [],
+    )
   let id.RoomId(room_id) = room_data.id
   let assert Ok(room_subject) = registry.get_room(reg, room_id)
 
@@ -133,7 +149,8 @@ pub fn broadcast_sends_to_all_except_sender_test() {
 pub fn idempotent_join_test() {
   let assert Ok(started) = registry.start()
   let reg = started.data
-  let assert Ok(room_data) = registry.create_room(reg, "Join Test")
+  let assert Ok(room_data) =
+    registry.create_room(reg, "Join Test", option.None, option.None, [], [])
   let id.RoomId(room_id) = room_data.id
   let assert Ok(room_subject) = registry.get_room(reg, room_id)
 

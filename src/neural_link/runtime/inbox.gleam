@@ -1,5 +1,6 @@
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
+import gleam/int
 import gleam/list
 import gleam/otp/actor
 import neural_link/domain/id.{
@@ -17,12 +18,16 @@ type PendingInboxWait {
   PendingInboxWait(
     wait_id: WaitId,
     filter: WaitFilter,
+    since_sequence: Int,
     reply: Subject(Result(Message, String)),
   )
 }
 
 type InboxState {
-  InboxState(waits: Dict(String, List(PendingInboxWait)))
+  InboxState(
+    waits: Dict(String, List(PendingInboxWait)),
+    self_subject: Subject(InboxMessage),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -33,10 +38,14 @@ pub type InboxMessage {
   RegisterWait(
     participant_id: ParticipantId,
     filter: WaitFilter,
+    since_sequence: Int,
+    timeout_ms: Int,
     reply: Subject(Result(Message, String)),
   )
   NotifyMessage(message: Message)
   CancelWait(participant_id: ParticipantId, wait_id: WaitId)
+  TimeoutWait(participant_id: ParticipantId, wait_id: WaitId)
+  SetSelf(subject: Subject(InboxMessage))
   Shutdown
 }
 
@@ -45,9 +54,17 @@ pub type InboxMessage {
 // ---------------------------------------------------------------------------
 
 pub fn start() -> actor.StartResult(Subject(InboxMessage)) {
-  actor.new(InboxState(waits: dict.new()))
-  |> actor.on_message(handle_message)
-  |> actor.start
+  let result =
+    actor.new(InboxState(waits: dict.new(), self_subject: process.new_subject()))
+    |> actor.on_message(handle_message)
+    |> actor.start
+  case result {
+    Ok(started) -> {
+      actor.send(started.data, SetSelf(started.data))
+      Ok(started)
+    }
+    Error(e) -> Error(e)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -59,18 +76,29 @@ fn handle_message(
   msg: InboxMessage,
 ) -> actor.Next(InboxState, InboxMessage) {
   case msg {
-    RegisterWait(participant_id, filter, reply) -> {
+    RegisterWait(participant_id, filter, since_sequence, timeout_ms, reply) -> {
       let key = participant_id_to_string(participant_id)
       let wait_id = new_wait_id()
       let pending =
-        PendingInboxWait(wait_id: wait_id, filter: filter, reply: reply)
+        PendingInboxWait(
+          wait_id: wait_id,
+          filter: filter,
+          since_sequence: since_sequence,
+          reply: reply,
+        )
       let existing = case dict.get(state.waits, key) {
         Ok(ws) -> ws
         Error(_) -> []
       }
       let updated = [pending, ..existing]
       let new_waits = dict.insert(state.waits, key, updated)
-      actor.continue(InboxState(waits: new_waits))
+      // Schedule timeout
+      process.send_after(
+        state.self_subject,
+        timeout_ms,
+        TimeoutWait(participant_id, wait_id),
+      )
+      actor.continue(InboxState(..state, waits: new_waits))
     }
 
     NotifyMessage(message) -> {
@@ -86,6 +114,7 @@ fn handle_message(
           let #(matched, kept) =
             list.partition(pending_list, fn(pw) {
               in_audience
+              && message.sequence > pw.since_sequence
               && matches_filter(pw.filter, message.kind, message.from)
             })
           list.each(matched, fn(pw) { actor.send(pw.reply, Ok(message)) })
@@ -94,32 +123,76 @@ fn handle_message(
             _ -> dict.insert(acc, pid_str, kept)
           }
         })
-      actor.continue(InboxState(waits: new_waits))
+      actor.continue(InboxState(..state, waits: new_waits))
     }
 
     CancelWait(participant_id, wait_id) -> {
-      let key = participant_id_to_string(participant_id)
+      let new_waits =
+        remove_wait(state.waits, participant_id, wait_id, fn(pw) {
+          actor.send(pw.reply, Error("Wait cancelled"))
+        })
+      actor.continue(InboxState(..state, waits: new_waits))
+    }
+
+    TimeoutWait(participant_id, wait_id) -> {
       let wid_str = wait_id_to_string(wait_id)
-      let new_waits = case dict.get(state.waits, key) {
-        Error(_) -> state.waits
+      let key = participant_id_to_string(participant_id)
+      // Only fire timeout if the wait is still pending
+      case dict.get(state.waits, key) {
+        Error(_) -> actor.continue(state)
         Ok(pending_list) -> {
-          let #(cancelled, kept) =
-            list.partition(pending_list, fn(pw) {
+          let still_pending =
+            list.any(pending_list, fn(pw) {
               wait_id_to_string(pw.wait_id) == wid_str
             })
-          list.each(cancelled, fn(pw) {
-            actor.send(pw.reply, Error("Wait cancelled"))
-          })
-          case kept {
-            [] -> dict.delete(state.waits, key)
-            _ -> dict.insert(state.waits, key, kept)
+          case still_pending {
+            False -> actor.continue(state)
+            True -> {
+              let new_waits =
+                remove_wait(state.waits, participant_id, wait_id, fn(pw) {
+                  actor.send(
+                    pw.reply,
+                    Error(
+                      "Wait timed out after " <> int.to_string(30_000) <> "ms",
+                    ),
+                  )
+                })
+              actor.continue(InboxState(..state, waits: new_waits))
+            }
           }
         }
       }
-      actor.continue(InboxState(waits: new_waits))
+    }
+
+    SetSelf(subject) -> {
+      actor.continue(InboxState(..state, self_subject: subject))
     }
 
     Shutdown -> actor.stop()
+  }
+}
+
+fn remove_wait(
+  waits: Dict(String, List(PendingInboxWait)),
+  participant_id: ParticipantId,
+  wait_id: WaitId,
+  on_removed: fn(PendingInboxWait) -> Nil,
+) -> Dict(String, List(PendingInboxWait)) {
+  let key = participant_id_to_string(participant_id)
+  let wid_str = wait_id_to_string(wait_id)
+  case dict.get(waits, key) {
+    Error(_) -> waits
+    Ok(pending_list) -> {
+      let #(removed, kept) =
+        list.partition(pending_list, fn(pw) {
+          wait_id_to_string(pw.wait_id) == wid_str
+        })
+      list.each(removed, on_removed)
+      case kept {
+        [] -> dict.delete(waits, key)
+        _ -> dict.insert(waits, key, kept)
+      }
+    }
   }
 }
 
@@ -131,9 +204,12 @@ pub fn register_wait(
   inbox: Subject(InboxMessage),
   participant_id: ParticipantId,
   filter: WaitFilter,
+  since_sequence: Int,
+  timeout_ms: Int,
 ) -> Result(Message, String) {
-  actor.call(inbox, 30_000, fn(reply) {
-    RegisterWait(participant_id, filter, reply)
+  let call_timeout = timeout_ms + 5000
+  actor.call(inbox, call_timeout, fn(reply) {
+    RegisterWait(participant_id, filter, since_sequence, timeout_ms, reply)
   })
 }
 

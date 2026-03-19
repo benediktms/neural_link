@@ -1,3 +1,4 @@
+import birl
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/process.{type Subject}
@@ -5,8 +6,11 @@ import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import gleam/otp/actor
+import gleam/result
 import gleam/string
+import logging
+import neural_link/brain/bridge
+import neural_link/brain/types.{type BrainConfig, BrainConfig}
 import neural_link/domain/id.{
   MessageId, ParticipantId, ThreadId, message_id_to_string,
   participant_id_to_string,
@@ -16,6 +20,8 @@ import neural_link/domain/participant as participant_domain
 import neural_link/domain/room as domain_room
 import neural_link/domain/wait
 import neural_link/mcp/transport
+import neural_link/runtime/inbox as inbox_mod
+import neural_link/runtime/presence as presence_mod
 import neural_link/runtime/registry as registry_mod
 import neural_link/runtime/room as room_mod
 
@@ -25,17 +31,19 @@ import neural_link/runtime/room as room_mod
 
 pub fn make_handler(
   registry: Subject(registry_mod.RegistryMessage),
+  inbox: Subject(inbox_mod.InboxMessage),
+  presence: Subject(presence_mod.PresenceMessage),
 ) -> transport.ToolCallHandler {
   fn(tool_name: String, arguments: Option(Dynamic)) -> Result(json.Json, String) {
     case tool_name {
       "room_open" -> handle_room_open(registry, arguments)
-      "room_join" -> handle_room_join(registry, arguments)
-      "message_send" -> handle_message_send(registry, arguments)
+      "room_join" -> handle_room_join(registry, presence, arguments)
+      "message_send" -> handle_message_send(registry, inbox, arguments)
       "inbox_read" -> handle_inbox_read(registry, arguments)
       "message_ack" -> handle_message_ack(registry, arguments)
-      "wait_for" -> handle_wait_for(registry, arguments)
+      "wait_for" -> handle_wait_for(registry, inbox, arguments)
       "thread_summarize" -> handle_thread_summarize(registry, arguments)
-      "room_close" -> handle_room_close(registry, arguments)
+      "room_close" -> handle_room_close(registry, presence, arguments)
       _ -> Error("Unknown tool: " <> tool_name)
     }
   }
@@ -119,7 +127,7 @@ fn split_comma(s: String) -> List(String) {
 fn encode_message(msg: message.Message) -> json.Json {
   let mid = message_id_to_string(msg.message_id)
   let from = participant_id_to_string(msg.from)
-  let kind_str = kind_to_string(msg.kind)
+  let kind_str = message.kind_to_string(msg.kind)
   json.object([
     #("message_id", json.string(mid)),
     #("from", json.string(from)),
@@ -127,21 +135,6 @@ fn encode_message(msg: message.Message) -> json.Json {
     #("summary", json.string(msg.summary)),
     #("sequence", json.int(msg.sequence)),
   ])
-}
-
-fn kind_to_string(kind: message.MessageKind) -> String {
-  case kind {
-    message.Question -> "question"
-    message.Answer -> "answer"
-    message.Finding -> "finding"
-    message.Handoff -> "handoff"
-    message.Blocker -> "blocker"
-    message.Decision -> "decision"
-    message.ReviewRequest -> "review_request"
-    message.ReviewResult -> "review_result"
-    message.ArtifactRef -> "artifact_ref"
-    message.Summary -> "summary"
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -152,9 +145,28 @@ fn handle_room_open(
   registry: Subject(registry_mod.RegistryMessage),
   arguments: Option(Dynamic),
 ) -> Result(json.Json, String) {
-  use params <- result_then(require_params(arguments))
-  use title <- result_then(get_string_param(params, "title"))
-  use room <- result_then(registry_mod.create_room(registry, title))
+  use params <- result.try(require_params(arguments))
+  use title <- result.try(get_string_param(params, "title"))
+  let purpose = get_optional_string_param(params, "purpose")
+  let external_ref = get_optional_string_param(params, "external_ref")
+  let tags =
+    get_optional_string_param(params, "tags")
+    |> option.map(split_comma)
+    |> option.unwrap([])
+  let brains =
+    get_optional_string_param(params, "brains")
+    |> option.map(split_comma)
+    |> option.unwrap([])
+  use room <- result.try(registry_mod.create_room(
+    registry,
+    title,
+    purpose,
+    external_ref,
+    tags,
+    brains,
+  ))
+  // Fire-and-forget brain bridge per declared brain
+  fire_brain_bridge(room.brains, fn(cfg) { bridge.on_room_open(cfg, room) })
   let id.RoomId(room_id_str) = room.id
   Ok(
     json.object([
@@ -171,19 +183,27 @@ fn handle_room_open(
 
 fn handle_room_join(
   registry: Subject(registry_mod.RegistryMessage),
+  presence: Subject(presence_mod.PresenceMessage),
   arguments: Option(Dynamic),
 ) -> Result(json.Json, String) {
-  use params <- result_then(require_params(arguments))
-  use room_id <- result_then(get_string_param(params, "room_id"))
-  use participant_id <- result_then(get_string_param(params, "participant_id"))
-  use display_name <- result_then(get_string_param(params, "display_name"))
+  use params <- result.try(require_params(arguments))
+  use room_id <- result.try(get_string_param(params, "room_id"))
+  use participant_id <- result.try(get_string_param(params, "participant_id"))
+  use display_name <- result.try(get_string_param(params, "display_name"))
   let role_str =
     get_optional_string_param(params, "role")
     |> option.unwrap("member")
   let role = parse_role(role_str)
   let p = participant_domain.new(participant_id, display_name, role)
-  use room_subject <- result_then(registry_mod.get_room(registry, room_id))
-  use _ <- result_then(room_mod.join(room_subject, p))
+  use room_subject <- result.try(registry_mod.get_room(registry, room_id))
+  use _ <- result.try(room_mod.join(room_subject, p))
+  // Register in presence tracker
+  presence_mod.register(
+    presence,
+    ParticipantId(participant_id),
+    room_id,
+    300_000,
+  )
   Ok(
     json.object([
       #("room_id", json.string(room_id)),
@@ -199,14 +219,15 @@ fn handle_room_join(
 
 fn handle_message_send(
   registry: Subject(registry_mod.RegistryMessage),
+  inbox: Subject(inbox_mod.InboxMessage),
   arguments: Option(Dynamic),
 ) -> Result(json.Json, String) {
-  use params <- result_then(require_params(arguments))
-  use room_id <- result_then(get_string_param(params, "room_id"))
-  use from_str <- result_then(get_string_param(params, "from"))
-  use kind_str <- result_then(get_string_param(params, "kind"))
-  use summary <- result_then(get_string_param(params, "summary"))
-  use kind <- result_then(parse_kind(kind_str))
+  use params <- result.try(require_params(arguments))
+  use room_id <- result.try(get_string_param(params, "room_id"))
+  use from_str <- result.try(get_string_param(params, "from"))
+  use kind_str <- result.try(get_string_param(params, "kind"))
+  use summary <- result.try(get_string_param(params, "summary"))
+  use kind <- result.try(parse_kind(kind_str))
   let from_id = ParticipantId(from_str)
   let to_ids =
     get_optional_string_param(params, "to")
@@ -215,14 +236,25 @@ fn handle_message_send(
       |> list.map(ParticipantId)
     })
     |> option.unwrap([])
-  use room_subject <- result_then(registry_mod.get_room(registry, room_id))
-  use msg <- result_then(room_mod.send_msg(
+  let body = get_optional_string_param(params, "body")
+  let thread_id =
+    get_optional_string_param(params, "thread_id")
+    |> option.map(ThreadId)
+  use room_subject <- result.try(registry_mod.get_room(registry, room_id))
+  use msg <- result.try(room_mod.send_msg_full(
     room_subject,
     from_id,
     to_ids,
     kind,
     summary,
+    body,
+    thread_id,
   ))
+  // Notify inbox of new message
+  inbox_mod.notify_message(inbox, msg)
+  // Fire-and-forget brain bridge using per-room brains
+  let room_state = room_mod.get_state(room_subject)
+  fire_brain_bridge(room_state.brains, fn(cfg) { bridge.on_message(cfg, msg) })
   let mid = message_id_to_string(msg.message_id)
   let id.RoomId(rid) = msg.room_id
   Ok(
@@ -242,14 +274,14 @@ fn handle_inbox_read(
   registry: Subject(registry_mod.RegistryMessage),
   arguments: Option(Dynamic),
 ) -> Result(json.Json, String) {
-  use params <- result_then(require_params(arguments))
-  use room_id <- result_then(get_string_param(params, "room_id"))
-  use participant_id_str <- result_then(get_string_param(
+  use params <- result.try(require_params(arguments))
+  use room_id <- result.try(get_string_param(params, "room_id"))
+  use participant_id_str <- result.try(get_string_param(
     params,
     "participant_id",
   ))
   let pid = ParticipantId(participant_id_str)
-  use room_subject <- result_then(registry_mod.get_room(registry, room_id))
+  use room_subject <- result.try(registry_mod.get_room(registry, room_id))
   let messages = room_mod.read_inbox(room_subject, pid)
   Ok(json.array(messages, encode_message))
 }
@@ -262,19 +294,19 @@ fn handle_message_ack(
   registry: Subject(registry_mod.RegistryMessage),
   arguments: Option(Dynamic),
 ) -> Result(json.Json, String) {
-  use params <- result_then(require_params(arguments))
-  use room_id <- result_then(get_string_param(params, "room_id"))
-  use participant_id_str <- result_then(get_string_param(
+  use params <- result.try(require_params(arguments))
+  use room_id <- result.try(get_string_param(params, "room_id"))
+  use participant_id_str <- result.try(get_string_param(
     params,
     "participant_id",
   ))
-  use message_ids_str <- result_then(get_string_param(params, "message_ids"))
+  use message_ids_str <- result.try(get_string_param(params, "message_ids"))
   let pid = ParticipantId(participant_id_str)
   let mids =
     split_comma(message_ids_str)
     |> list.map(MessageId)
-  use room_subject <- result_then(registry_mod.get_room(registry, room_id))
-  use _ <- result_then(room_mod.ack_messages(room_subject, pid, mids))
+  use room_subject <- result.try(registry_mod.get_room(registry, room_id))
+  use _ <- result.try(room_mod.ack_messages(room_subject, pid, mids))
   Ok(json.object([#("acked", json.bool(True))]))
 }
 
@@ -284,11 +316,12 @@ fn handle_message_ack(
 
 fn handle_wait_for(
   registry: Subject(registry_mod.RegistryMessage),
+  inbox: Subject(inbox_mod.InboxMessage),
   arguments: Option(Dynamic),
 ) -> Result(json.Json, String) {
-  use params <- result_then(require_params(arguments))
-  use room_id <- result_then(get_string_param(params, "room_id"))
-  use participant_id_str <- result_then(get_string_param(
+  use params <- result.try(require_params(arguments))
+  use room_id <- result.try(get_string_param(params, "room_id"))
+  use participant_id_str <- result.try(get_string_param(
     params,
     "participant_id",
   ))
@@ -304,15 +337,18 @@ fn handle_wait_for(
     })
     |> option.unwrap(0)
 
-  let timeout_ms =
-    get_optional_string_param(params, "timeout_ms")
-    |> option.then(fn(s) {
-      case int.parse(s) {
-        Ok(n) -> Some(n)
-        Error(_) -> None
-      }
-    })
-    |> option.unwrap(30_000)
+  let timeout_ms = {
+    let raw =
+      get_optional_string_param(params, "timeout_ms")
+      |> option.then(fn(s) {
+        case int.parse(s) {
+          Ok(n) -> Some(n)
+          Error(_) -> None
+        }
+      })
+      |> option.unwrap(30_000)
+    int.min(raw, 120_000)
+  }
 
   let kinds =
     get_optional_string_param(params, "kinds")
@@ -332,23 +368,25 @@ fn handle_wait_for(
 
   let filter = wait.WaitFilter(kinds: kinds, from: froms)
 
-  use room_subject <- result_then(registry_mod.get_room(registry, room_id))
+  use room_subject <- result.try(registry_mod.get_room(registry, room_id))
 
-  let call_timeout = timeout_ms + 5000
-  let wait_result =
-    actor.call(room_subject, call_timeout, fn(reply) {
-      room_mod.RegisterWait(
-        participant_id: pid,
-        filter: filter,
-        since_sequence: since_seq,
-        timeout_ms: timeout_ms,
-        reply: reply,
-      )
+  // Query room messages in the handler layer (not inside inbox actor) to avoid deadlock
+  let messages = room_mod.get_messages(room_subject, None)
+  let existing_match =
+    list.find(list.reverse(messages), fn(m) {
+      m.sequence > since_seq && wait.matches_filter(filter, m.kind, m.from)
     })
-
-  case wait_result {
+  case existing_match {
     Ok(msg) -> Ok(encode_message(msg))
-    Error(e) -> Error(e)
+    Error(_) -> {
+      // No immediate match — register wait with inbox (non-blocking for inbox)
+      let wait_result =
+        inbox_mod.register_wait(inbox, pid, filter, since_seq, timeout_ms)
+      case wait_result {
+        Ok(msg) -> Ok(encode_message(msg))
+        Error(e) -> Error(e)
+      }
+    }
   }
 }
 
@@ -360,12 +398,12 @@ fn handle_thread_summarize(
   registry: Subject(registry_mod.RegistryMessage),
   arguments: Option(Dynamic),
 ) -> Result(json.Json, String) {
-  use params <- result_then(require_params(arguments))
-  use room_id <- result_then(get_string_param(params, "room_id"))
+  use params <- result.try(require_params(arguments))
+  use room_id <- result.try(get_string_param(params, "room_id"))
   let thread_id_opt =
     get_optional_string_param(params, "thread_id")
     |> option.map(ThreadId)
-  use room_subject <- result_then(registry_mod.get_room(registry, room_id))
+  use room_subject <- result.try(registry_mod.get_room(registry, room_id))
   let messages = room_mod.get_messages(room_subject, thread_id_opt)
   let count = list.length(messages)
   let summary =
@@ -386,14 +424,31 @@ fn handle_thread_summarize(
 
 fn handle_room_close(
   registry: Subject(registry_mod.RegistryMessage),
+  presence: Subject(presence_mod.PresenceMessage),
   arguments: Option(Dynamic),
 ) -> Result(json.Json, String) {
-  use params <- result_then(require_params(arguments))
-  use room_id <- result_then(get_string_param(params, "room_id"))
-  use resolution_str <- result_then(get_string_param(params, "resolution"))
-  use resolution <- result_then(parse_resolution(resolution_str))
-  use room_subject <- result_then(registry_mod.get_room(registry, room_id))
-  use _ <- result_then(room_mod.close_room(room_subject, resolution))
+  use params <- result.try(require_params(arguments))
+  use room_id <- result.try(get_string_param(params, "room_id"))
+  use resolution_str <- result.try(get_string_param(params, "resolution"))
+  use resolution <- result.try(parse_resolution(resolution_str))
+  use room_subject <- result.try(registry_mod.get_room(registry, room_id))
+  // Get state and messages before close for brain bridge
+  let room_state = room_mod.get_state(room_subject)
+  let messages = room_mod.get_messages(room_subject, None)
+  use _ <- result.try(room_mod.close_room(room_subject, resolution))
+  // Unregister all participants from presence
+  list.each(room_state.participants, fn(p) {
+    presence_mod.unregister(presence, p.id, room_id)
+  })
+  // Fire-and-forget brain bridge using per-room brains
+  let closed_room = domain_room.close_with_resolution(room_state, resolution)
+  let message_count = list.length(messages)
+  let duration_ms =
+    birl.to_unix_milli(birl.utc_now())
+    - birl.to_unix_milli(room_state.created_at)
+  fire_brain_bridge(room_state.brains, fn(cfg) {
+    bridge.on_room_close(cfg, closed_room, message_count, duration_ms)
+  })
   Ok(
     json.object([
       #("room_id", json.string(room_id)),
@@ -403,12 +458,33 @@ fn handle_room_close(
 }
 
 // ---------------------------------------------------------------------------
-// Utility: monadic result chaining
+// Brain bridge helpers
 // ---------------------------------------------------------------------------
 
-fn result_then(result: Result(a, e), f: fn(a) -> Result(b, e)) -> Result(b, e) {
-  case result {
-    Ok(value) -> f(value)
-    Error(e) -> Error(e)
+fn fire_brain_bridge(
+  brains: List(String),
+  action: fn(BrainConfig) -> types.BrainResult(String),
+) -> Nil {
+  list.each(brains, fn(brain_name) {
+    let cfg = BrainConfig(brain_name: brain_name)
+    process.spawn(fn() {
+      case action(cfg) {
+        Ok(_) -> Nil
+        Error(err) ->
+          logging.log(
+            logging.Warning,
+            "brain bridge failed: " <> brain_error_to_string(err),
+          )
+      }
+    })
+    Nil
+  })
+}
+
+fn brain_error_to_string(err: types.BrainError) -> String {
+  case err {
+    types.Timeout -> "timeout"
+    types.CommandFailed(s) -> "command failed: " <> s
+    types.ParseError(s) -> "parse error: " <> s
   }
 }

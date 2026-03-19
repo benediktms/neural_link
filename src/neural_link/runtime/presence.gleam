@@ -118,6 +118,7 @@ fn handle_message(
       actor.continue(state)
     }
 
+    // TODO: v2 — add periodic timer to call CheckExpired and remove stale participants
     CheckExpired(reply) -> {
       let now = birl.to_unix_milli(birl.utc_now())
       let #(expired, remaining) =

@@ -31,6 +31,7 @@ pub type Room {
     purpose: Option(String),
     external_ref: Option(String),
     tags: List(String),
+    brains: List(String),
     resolution: Option(RoomResolution),
   )
 }
@@ -40,12 +41,13 @@ pub fn new(id: String, title: String) -> Room {
     id: RoomId(id),
     title: title,
     status: Open,
-    created_at: birl.now(),
+    created_at: birl.utc_now(),
     participants: [],
     metadata: None,
     purpose: None,
     external_ref: None,
     tags: [],
+    brains: [],
     resolution: None,
   )
 }
@@ -56,17 +58,19 @@ pub fn new_with_metadata(
   purpose: Option(String),
   external_ref: Option(String),
   tags: List(String),
+  brains: List(String),
 ) -> Room {
   Room(
     id: RoomId(id),
     title: title,
     status: Open,
-    created_at: birl.now(),
+    created_at: birl.utc_now(),
     participants: [],
     metadata: None,
     purpose: purpose,
     external_ref: external_ref,
     tags: tags,
+    brains: brains,
     resolution: None,
   )
 }

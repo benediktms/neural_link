@@ -1,19 +1,35 @@
+import argv
 import gleam/io
-import neural_link/mcp/handlers
-import neural_link/mcp/tools
-import neural_link/mcp/transport
-import neural_link/runtime/registry
+import neural_link/cli/docs
+import neural_link/cli/start
+import neural_link/cli/stop
 
 pub fn main() -> Nil {
-  case registry.start() {
-    Ok(started) -> {
-      let registry_subject = started.data
-      let tool_defs = tools.all_tools()
-      let handler = handlers.make_handler(registry_subject)
-      transport.start(tool_defs, handler)
-    }
-    Error(_) -> {
-      io.println_error("Failed to start registry")
+  case argv.load().arguments {
+    ["start", ..flags] -> start.run(flags)
+    ["stop"] -> stop.run()
+    ["docs", ..args] -> docs.run(args)
+    ["version"] -> io.println("neural_link 0.1.0")
+    ["help"] | ["--help"] | ["-h"] -> print_usage()
+    [] -> print_usage()
+    [cmd, ..] -> {
+      io.println_error("Unknown command: " <> cmd)
+      print_usage()
     }
   }
+}
+
+fn print_usage() -> Nil {
+  io.println(
+    "neural_link — multi-agent coordination service
+
+Usage: nlk <command> [options]
+
+Commands:
+  start [--foreground]  Start the MCP server (default: daemonized)
+  stop                  Stop the running server
+  docs [path]           Upsert neural_link section into AGENTS.md
+  version               Print version
+  help                  Show this help",
+  )
 }

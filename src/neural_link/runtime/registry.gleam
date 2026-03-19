@@ -1,5 +1,6 @@
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
+import gleam/option.{type Option}
 import gleam/otp/actor
 import neural_link/domain/id
 import neural_link/domain/room.{type Room} as domain_room
@@ -8,7 +9,14 @@ import neural_link/runtime/room.{
 }
 
 pub type RegistryMessage {
-  CreateRoom(title: String, reply: Subject(Result(Room, String)))
+  CreateRoom(
+    title: String,
+    purpose: Option(String),
+    external_ref: Option(String),
+    tags: List(String),
+    brains: List(String),
+    reply: Subject(Result(Room, String)),
+  )
   GetRoom(room_id: String, reply: Subject(Result(Subject(RoomMessage), String)))
   ListRoomIds(reply: Subject(List(String)))
   RemoveRoom(room_id: String, reply: Subject(Result(Nil, String)))
@@ -29,9 +37,17 @@ fn handle_message(
   msg: RegistryMessage,
 ) -> actor.Next(State, RegistryMessage) {
   case msg {
-    CreateRoom(title, reply) -> {
+    CreateRoom(title, purpose, external_ref, tags, brains, reply) -> {
       let room_id = id.generate("room_")
-      let room_data = domain_room.new(room_id, title)
+      let room_data =
+        domain_room.new_with_metadata(
+          room_id,
+          title,
+          purpose,
+          external_ref,
+          tags,
+          brains,
+        )
       case start_room(room_data) {
         Ok(started) -> {
           let new_state = dict.insert(state, room_id, started.data)
@@ -84,8 +100,14 @@ fn handle_message(
 pub fn create_room(
   registry: Subject(RegistryMessage),
   title: String,
+  purpose: Option(String),
+  external_ref: Option(String),
+  tags: List(String),
+  brains: List(String),
 ) -> Result(Room, String) {
-  actor.call(registry, 5000, fn(reply) { CreateRoom(title, reply) })
+  actor.call(registry, 5000, fn(reply) {
+    CreateRoom(title, purpose, external_ref, tags, brains, reply)
+  })
 }
 
 pub fn get_room(

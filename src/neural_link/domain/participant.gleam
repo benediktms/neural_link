@@ -22,6 +22,6 @@ pub fn new(id: String, name: String, role: ParticipantRole) -> Participant {
     id: ParticipantId(id),
     display_name: name,
     role: role,
-    joined_at: birl.now(),
+    joined_at: birl.utc_now(),
   )
 }

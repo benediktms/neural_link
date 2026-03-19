@@ -1,5 +1,5 @@
 name = "neural_link"
-version = "1.0.0"
+version = "0.1.0"
 
 # Fill out these fields if you intend to generate HTML documentation or publish
 # your project to the Hex package manager.
@@ -19,6 +19,10 @@ gleam_otp = ">= 0.14.0 and < 2.0.0"
 gleam_json = ">= 3.1.0 and < 4.0.0"
 birl = ">= 1.7.0 and < 2.0.0"
 gleam_crypto = ">= 1.5.1 and < 2.0.0"
+mist = ">= 6.0.2 and < 7.0.0"
+gleam_http = ">= 4.3.0 and < 5.0.0"
+logging = ">= 1.3.0 and < 2.0.0"
+argv = ">= 1.0.2 and < 2.0.0"
 
 [dev_dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"

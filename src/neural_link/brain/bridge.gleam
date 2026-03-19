@@ -8,8 +8,7 @@ import neural_link/brain/types.{
 }
 import neural_link/domain/id
 import neural_link/domain/message.{
-  type Message, type MessageKind, Answer, ArtifactRef, Blocker, Decision,
-  Durable, Finding, Handoff, Question, ReviewRequest, ReviewResult, Summary,
+  type Message, Blocker, Decision, Durable, Handoff, ReviewResult, Summary,
   is_durable,
 }
 import neural_link/domain/room.{
@@ -103,27 +102,26 @@ fn option_to_string(opt: Option(String), default: String) -> String {
 /// Persist a durable message to brain.
 /// Returns Ok(record_id) if persisted, or Error if the message is not durable.
 /// Caller is responsible for async dispatch.
-pub fn on_message(config: BrainConfig, message: Message) -> BrainResult(String) {
-  let should_persist =
-    is_durable(message.kind) || message.persist_hint == Durable
+pub fn on_message(config: BrainConfig, msg: Message) -> BrainResult(String) {
+  let should_persist = is_durable(msg.kind) || msg.persist_hint == Durable
   case should_persist {
     False -> Error(CommandFailed("Message not durable — skipped"))
-    True -> persist_message(config, message)
+    True -> persist_message(config, msg)
   }
 }
 
-fn persist_message(config: BrainConfig, message: Message) -> BrainResult(String) {
-  let room_id = id.room_id_to_string(message.room_id)
-  let kind_str = kind_to_string(message.kind)
-  let title = "[" <> kind_str <> "] " <> message.summary
-  let text = build_message_text(room_id, kind_str, message)
-  case message.kind {
+fn persist_message(config: BrainConfig, msg: Message) -> BrainResult(String) {
+  let room_id = id.room_id_to_string(msg.room_id)
+  let kind_str = message.kind_to_string(msg.kind)
+  let title = "[" <> kind_str <> "] " <> msg.summary
+  let text = build_message_text(room_id, kind_str, msg)
+  case msg.kind {
     Summary -> {
       let tags = ["neural-link", "summary", room_id]
       client.create_artifact(config, title, text, "summary", tags)
     }
     _ -> {
-      let tag = case message.kind {
+      let tag = case msg.kind {
         Decision -> "decision"
         Blocker -> "blocker"
         Handoff -> "handoff"
@@ -136,39 +134,20 @@ fn persist_message(config: BrainConfig, message: Message) -> BrainResult(String)
   }
 }
 
-fn build_message_text(
-  room_id: String,
-  kind_str: String,
-  message: Message,
-) -> String {
-  let msg_id = id.message_id_to_string(message.message_id)
-  let from_str = id.participant_id_to_string(message.from)
-  let body_str = option_to_string(message.body, "none")
+fn build_message_text(room_id: String, kind_str: String, msg: Message) -> String {
+  let msg_id = id.message_id_to_string(msg.message_id)
+  let from_str = id.participant_id_to_string(msg.from)
+  let body_str = option_to_string(msg.body, "none")
   string.join(
     [
       "Message ID: " <> msg_id,
       "Room: " <> room_id,
       "From: " <> from_str,
       "Kind: " <> kind_str,
-      "Sequence: " <> int.to_string(message.sequence),
-      "Summary: " <> message.summary,
+      "Sequence: " <> int.to_string(msg.sequence),
+      "Summary: " <> msg.summary,
       "Body: " <> body_str,
     ],
     "\n",
   )
-}
-
-fn kind_to_string(kind: MessageKind) -> String {
-  case kind {
-    Question -> "question"
-    Answer -> "answer"
-    Finding -> "finding"
-    Handoff -> "handoff"
-    Blocker -> "blocker"
-    Decision -> "decision"
-    ReviewRequest -> "review-request"
-    ReviewResult -> "review-result"
-    ArtifactRef -> "artifact-ref"
-    Summary -> "summary"
-  }
 }

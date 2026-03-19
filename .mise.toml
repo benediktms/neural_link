@@ -1,0 +1,4 @@
+[tools]
+gleam = "1.15"
+erlang = "28"
+just = "1.47"

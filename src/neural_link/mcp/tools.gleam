@@ -42,6 +42,12 @@ fn room_open() -> protocol.ToolDefinition {
         description: "Comma-separated tags",
         required: False,
       ),
+      ToolProperty(
+        name: "brains",
+        prop_type: "string",
+        description: "Comma-separated brain names for event persistence",
+        required: False,
+      ),
     ],
   )
 }

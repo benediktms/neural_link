@@ -1,18 +1,22 @@
 import gleam/erlang/process
 import gleam/list
-import gleam/otp/actor
+import gleam/option.{None}
 import gleeunit/should
 import neural_link/domain/id
 import neural_link/domain/message
 import neural_link/domain/participant
 import neural_link/domain/wait
+import neural_link/runtime/inbox
 import neural_link/runtime/registry
 import neural_link/runtime/room
 
 pub fn wait_for_resolves_on_matching_message_test() {
-  let assert Ok(started) = registry.start()
-  let reg = started.data
-  let assert Ok(room_data) = registry.create_room(reg, "Wait Test")
+  let assert Ok(reg_started) = registry.start()
+  let reg = reg_started.data
+  let assert Ok(inbox_started) = inbox.start()
+  let inbox_subject = inbox_started.data
+  let assert Ok(room_data) =
+    registry.create_room(reg, "Wait Test", None, None, [], [])
   let id.RoomId(room_id) = room_data.id
   let assert Ok(room_subject) = registry.get_room(reg, room_id)
 
@@ -27,12 +31,13 @@ pub fn wait_for_resolves_on_matching_message_test() {
       participant.new("sender", "Sender", participant.Member),
     )
 
-  // Spawn a process that sends an answer after 100ms
+  // Spawn a process that sends an answer after 100ms, then notifies inbox
   let room_ref = room_subject
+  let inbox_ref = inbox_subject
   let _ =
     process.spawn(fn() {
       process.sleep(100)
-      let _ =
+      let assert Ok(msg) =
         room.send_msg(
           room_ref,
           id.ParticipantId("sender"),
@@ -40,20 +45,19 @@ pub fn wait_for_resolves_on_matching_message_test() {
           message.Answer,
           "Here is the answer",
         )
+      inbox.notify_message(inbox_ref, msg)
     })
 
-  // Register wait — this blocks until matching message arrives
+  // Register wait — blocks until matching message arrives
   let filter = wait.WaitFilter(kinds: [message.Answer], from: [])
   let wait_result =
-    actor.call(room_subject, 5000, fn(reply) {
-      room.RegisterWait(
-        participant_id: id.ParticipantId("waiter"),
-        filter: filter,
-        since_sequence: 0,
-        timeout_ms: 5000,
-        reply: reply,
-      )
-    })
+    inbox.register_wait(
+      inbox_subject,
+      id.ParticipantId("waiter"),
+      filter,
+      0,
+      5000,
+    )
 
   // Should resolve with the answer
   wait_result |> should.be_ok
@@ -62,10 +66,55 @@ pub fn wait_for_resolves_on_matching_message_test() {
   msg.summary |> should.equal("Here is the answer")
 }
 
+pub fn wait_for_immediate_match_test() {
+  let assert Ok(reg_started) = registry.start()
+  let reg = reg_started.data
+  let assert Ok(_inbox_started) = inbox.start()
+  let assert Ok(room_data) =
+    registry.create_room(reg, "Immediate Match Test", None, None, [], [])
+  let id.RoomId(room_id) = room_data.id
+  let assert Ok(room_subject) = registry.get_room(reg, room_id)
+
+  let assert Ok(Nil) =
+    room.join(
+      room_subject,
+      participant.new("waiter", "Waiter", participant.Member),
+    )
+  let assert Ok(Nil) =
+    room.join(
+      room_subject,
+      participant.new("sender", "Sender", participant.Member),
+    )
+
+  // Send message BEFORE checking
+  let assert Ok(_msg) =
+    room.send_msg(
+      room_subject,
+      id.ParticipantId("sender"),
+      [id.ParticipantId("waiter")],
+      message.Finding,
+      "Already here",
+    )
+
+  // Query room messages directly (as handler now does) to find immediate match
+  let messages = room.get_messages(room_subject, None)
+  let filter = wait.WaitFilter(kinds: [message.Finding], from: [])
+  let match =
+    list.find(list.reverse(messages), fn(m) {
+      m.sequence > 0 && wait.matches_filter(filter, m.kind, m.from)
+    })
+
+  match |> should.be_ok
+  let assert Ok(msg) = match
+  msg.kind |> should.equal(message.Finding)
+  msg.summary |> should.equal("Already here")
+}
+
 pub fn handoff_message_workflow_test() {
   let assert Ok(started) = registry.start()
   let reg = started.data
-  let assert Ok(room_data) = registry.create_room(reg, "Handoff Test")
+  let assert Ok(room_data) =
+    registry.create_room(reg, "Handoff Test", None, None, [], [])
   let id.RoomId(room_id) = room_data.id
   let assert Ok(room_subject) = registry.get_room(reg, room_id)
 
@@ -109,7 +158,8 @@ pub fn handoff_message_workflow_test() {
 pub fn receipt_isolation_across_participants_test() {
   let assert Ok(started) = registry.start()
   let reg = started.data
-  let assert Ok(room_data) = registry.create_room(reg, "Receipt Isolation Test")
+  let assert Ok(room_data) =
+    registry.create_room(reg, "Receipt Isolation Test", None, None, [], [])
   let id.RoomId(room_id) = room_data.id
   let assert Ok(room_subject) = registry.get_room(reg, room_id)
 
