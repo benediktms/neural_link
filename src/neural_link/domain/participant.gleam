@@ -5,6 +5,7 @@ pub type ParticipantRole {
   Owner
   Member
   Observer
+  Custom(String)
 }
 
 pub type Participant {
