@@ -7,10 +7,10 @@ import neural_link/brain/types.{
   type BrainConfig, type BrainResult, CommandFailed,
 }
 import neural_link/domain/id
-import neural_link/domain/message as msg_module
 import neural_link/domain/message.{
   type Message, type MessageKind, Answer, ArtifactRef, Blocker, Decision,
   Durable, Finding, Handoff, Question, ReviewRequest, ReviewResult, Summary,
+  is_durable,
 }
 import neural_link/domain/room.{
   type Room, Cancelled, Completed, Failed, Superseded,
@@ -105,7 +105,7 @@ fn option_to_string(opt: Option(String), default: String) -> String {
 /// Caller is responsible for async dispatch.
 pub fn on_message(config: BrainConfig, message: Message) -> BrainResult(String) {
   let should_persist =
-    msg_module.is_durable(message.kind) || message.persist_hint == Durable
+    is_durable(message.kind) || message.persist_hint == Durable
   case should_persist {
     False -> Error(CommandFailed("Message not durable — skipped"))
     True -> persist_message(config, message)
