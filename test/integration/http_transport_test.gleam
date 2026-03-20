@@ -18,6 +18,12 @@ fn http_post(
   headers: List(#(String, String)),
 ) -> Result(#(Int, String, List(#(String, String))), String)
 
+@external(erlang, "neural_link_http_test_ffi", "http_get")
+fn http_get(
+  url: String,
+  headers: List(#(String, String)),
+) -> Result(#(Int, String, List(#(String, String))), String)
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -148,8 +154,336 @@ pub fn http_health_endpoint_test() {
   let port = start_test_server()
   let url = "http://localhost:" <> int.to_string(port) <> "/health"
 
-  let assert Ok(#(200, resp_body, _)) = http_post(url, "", [])
+  let assert Ok(#(200, resp_body, _)) = http_get(url, [])
   string.contains(resp_body, "ok") |> should.be_true
+}
+
+pub fn http_agent_inbox_count_returns_404_for_unknown_agent_test() {
+  let port = start_test_server()
+  let url =
+    "http://localhost:"
+    <> int.to_string(port)
+    <> "/agent/unknown-agent-id/inbox/count"
+
+  let assert Ok(#(404, resp_body, _)) = http_get(url, [])
+  string.contains(resp_body, "Agent not found") |> should.be_true
+}
+
+pub fn http_agent_inbox_count_tracks_via_agent_id_test() {
+  let port = start_test_server()
+  let base = "http://localhost:" <> int.to_string(port)
+  let mcp_url = base <> "/mcp"
+
+  // Initialize
+  let assert Ok(#(200, _, init_headers)) =
+    http_post(
+      mcp_url,
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+      [],
+    )
+  let assert Ok(sid) = find_header(init_headers, "mcp-session-id")
+  let h = [#("mcp-session-id", sid)]
+
+  // Open room
+  let assert Ok(#(200, open_resp, _)) =
+    http_post(
+      mcp_url,
+      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Agent ID Test\"}}}",
+      h,
+    )
+  let assert Ok(room_id) = extract_json_string(open_resp, "room_id")
+
+  // Join sender (no agent_id)
+  let join_sender =
+    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"room_join\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"participant_id\":\"sender\",\"display_name\":\"Sender\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, join_sender, h)
+
+  // Join receiver WITH agent_id
+  let join_receiver =
+    "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"room_join\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"participant_id\":\"receiver\",\"display_name\":\"Receiver\",\"agent_id\":\"agent-abc-123\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, join_receiver, h)
+
+  // Query by agent_id before messages — should be 0
+  let agent_url = base <> "/agent/agent-abc-123/inbox/count"
+  let assert Ok(#(200, count_0, _)) = http_get(agent_url, [])
+  string.contains(count_0, "\"total\":0") |> should.be_true
+
+  // Send message from sender
+  let send =
+    "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"message_send\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"from\":\"sender\",\"kind\":\"finding\",\"summary\":\"test\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, send, h)
+
+  // Query by agent_id — should be 1
+  let assert Ok(#(200, count_1, _)) = http_get(agent_url, [])
+  string.contains(count_1, "\"total\":1") |> should.be_true
+  string.contains(count_1, room_id) |> should.be_true
+}
+
+pub fn http_concurrent_agents_isolated_inbox_counts_test() {
+  let port = start_test_server()
+  let base = "http://localhost:" <> int.to_string(port)
+  let mcp_url = base <> "/mcp"
+
+  // Initialize
+  let assert Ok(#(200, _, init_headers)) =
+    http_post(
+      mcp_url,
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+      [],
+    )
+  let assert Ok(sid) = find_header(init_headers, "mcp-session-id")
+  let h = [#("mcp-session-id", sid)]
+
+  // Open room
+  let assert Ok(#(200, open_resp, _)) =
+    http_post(
+      mcp_url,
+      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Concurrency Test\"}}}",
+      h,
+    )
+  let assert Ok(room_id) = extract_json_string(open_resp, "room_id")
+
+  // Join lead (no agent_id)
+  let join_lead =
+    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"room_join\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"participant_id\":\"lead\",\"display_name\":\"Lead\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, join_lead, h)
+
+  // Join drone-1 with agent_id alpha
+  let join_d1 =
+    "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"room_join\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"participant_id\":\"drone-1\",\"display_name\":\"Drone 1\",\"agent_id\":\"agent-alpha\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, join_d1, h)
+
+  // Join drone-2 with agent_id beta
+  let join_d2 =
+    "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"room_join\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"participant_id\":\"drone-2\",\"display_name\":\"Drone 2\",\"agent_id\":\"agent-beta\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, join_d2, h)
+
+  // Both agents start at 0
+  let alpha_url = base <> "/agent/agent-alpha/inbox/count"
+  let beta_url = base <> "/agent/agent-beta/inbox/count"
+
+  let assert Ok(#(200, a0, _)) = http_get(alpha_url, [])
+  string.contains(a0, "\"total\":0") |> should.be_true
+  let assert Ok(#(200, b0, _)) = http_get(beta_url, [])
+  string.contains(b0, "\"total\":0") |> should.be_true
+
+  // Lead sends message (broadcast) — both drones get it
+  let send1 =
+    "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"message_send\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"from\":\"lead\",\"kind\":\"question\",\"summary\":\"status?\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, send1, h)
+
+  // Both agents see 1
+  let assert Ok(#(200, a1, _)) = http_get(alpha_url, [])
+  string.contains(a1, "\"total\":1") |> should.be_true
+  let assert Ok(#(200, b1, _)) = http_get(beta_url, [])
+  string.contains(b1, "\"total\":1") |> should.be_true
+
+  // Drone-1 acks — only alpha drops to 0, beta stays at 1
+  let read_d1 =
+    "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"inbox_read\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"participant_id\":\"drone-1\"}}}"
+  let assert Ok(#(200, inbox_d1, _)) = http_post(mcp_url, read_d1, h)
+  let assert Ok(msg_id) = extract_json_string(inbox_d1, "message_id")
+
+  let ack_d1 =
+    "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"message_ack\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"participant_id\":\"drone-1\",\"message_ids\":\""
+    <> msg_id
+    <> "\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, ack_d1, h)
+
+  // Alpha = 0, Beta still = 1
+  let assert Ok(#(200, a2, _)) = http_get(alpha_url, [])
+  string.contains(a2, "\"total\":0") |> should.be_true
+  let assert Ok(#(200, b2, _)) = http_get(beta_url, [])
+  string.contains(b2, "\"total\":1") |> should.be_true
+}
+
+pub fn http_agent_id_isolation_across_rooms_test() {
+  let port = start_test_server()
+  let base = "http://localhost:" <> int.to_string(port)
+  let mcp_url = base <> "/mcp"
+
+  // Initialize
+  let assert Ok(#(200, _, init_headers)) =
+    http_post(
+      mcp_url,
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+      [],
+    )
+  let assert Ok(sid) = find_header(init_headers, "mcp-session-id")
+  let h = [#("mcp-session-id", sid)]
+
+  // Open two rooms
+  let assert Ok(#(200, open1, _)) =
+    http_post(
+      mcp_url,
+      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Room A\"}}}",
+      h,
+    )
+  let assert Ok(room_a) = extract_json_string(open1, "room_id")
+
+  let assert Ok(#(200, open2, _)) =
+    http_post(
+      mcp_url,
+      "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Room B\"}}}",
+      h,
+    )
+  let assert Ok(room_b) = extract_json_string(open2, "room_id")
+
+  // Agent joins both rooms with the same agent_id but different participant_ids
+  // This tests that agent_id maps to the participant_id from the LAST join
+  // (realistic: one agent, one agent_id, but the participant_id is consistent)
+  let join_a =
+    "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"room_join\",\"arguments\":{\"room_id\":\""
+    <> room_a
+    <> "\",\"participant_id\":\"drone-x\",\"display_name\":\"Drone X\",\"agent_id\":\"agent-x\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, join_a, h)
+
+  // Join room B with same participant_id (same agent, same identity)
+  let join_b =
+    "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"room_join\",\"arguments\":{\"room_id\":\""
+    <> room_b
+    <> "\",\"participant_id\":\"drone-x\",\"display_name\":\"Drone X\",\"agent_id\":\"agent-x\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, join_b, h)
+
+  // Join a sender in both rooms
+  let join_s_a =
+    "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"room_join\",\"arguments\":{\"room_id\":\""
+    <> room_a
+    <> "\",\"participant_id\":\"sender\",\"display_name\":\"Sender\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, join_s_a, h)
+  let join_s_b =
+    "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"room_join\",\"arguments\":{\"room_id\":\""
+    <> room_b
+    <> "\",\"participant_id\":\"sender\",\"display_name\":\"Sender\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, join_s_b, h)
+
+  // Send message in room A only
+  let send_a =
+    "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"message_send\",\"arguments\":{\"room_id\":\""
+    <> room_a
+    <> "\",\"from\":\"sender\",\"kind\":\"finding\",\"summary\":\"room A msg\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, send_a, h)
+
+  // Send two messages in room B
+  let send_b1 =
+    "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"message_send\",\"arguments\":{\"room_id\":\""
+    <> room_b
+    <> "\",\"from\":\"sender\",\"kind\":\"finding\",\"summary\":\"room B msg 1\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, send_b1, h)
+  let send_b2 =
+    "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"message_send\",\"arguments\":{\"room_id\":\""
+    <> room_b
+    <> "\",\"from\":\"sender\",\"kind\":\"finding\",\"summary\":\"room B msg 2\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, send_b2, h)
+
+  // Agent endpoint should aggregate: 1 from room A + 2 from room B = 3
+  let agent_url = base <> "/agent/agent-x/inbox/count"
+  let assert Ok(#(200, resp, _)) = http_get(agent_url, [])
+  string.contains(resp, "\"total\":3") |> should.be_true
+  // Both room IDs present
+  string.contains(resp, room_a) |> should.be_true
+  string.contains(resp, room_b) |> should.be_true
+}
+
+pub fn http_inbox_count_returns_404_for_unknown_participant_test() {
+  let port = start_test_server()
+  let url =
+    "http://localhost:" <> int.to_string(port) <> "/inbox/unknown-agent/count"
+
+  let assert Ok(#(404, resp_body, _)) = http_get(url, [])
+  string.contains(resp_body, "Participant not found") |> should.be_true
+}
+
+pub fn http_inbox_count_tracks_pending_messages_test() {
+  let port = start_test_server()
+  let base = "http://localhost:" <> int.to_string(port)
+  let mcp_url = base <> "/mcp"
+
+  // Initialize
+  let assert Ok(#(200, _, init_headers)) =
+    http_post(
+      mcp_url,
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+      [],
+    )
+  let assert Ok(sid) = find_header(init_headers, "mcp-session-id")
+  let h = [#("mcp-session-id", sid)]
+
+  // Open room
+  let assert Ok(#(200, open_resp, _)) =
+    http_post(
+      mcp_url,
+      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Count Test\"}}}",
+      h,
+    )
+  let assert Ok(room_id) = extract_json_string(open_resp, "room_id")
+
+  // Join two participants
+  let join_a =
+    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"room_join\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"participant_id\":\"sender\",\"display_name\":\"Sender\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, join_a, h)
+  let join_b =
+    "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"room_join\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"participant_id\":\"receiver\",\"display_name\":\"Receiver\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, join_b, h)
+
+  // Check count before any messages — should be 0
+  let count_url = base <> "/inbox/receiver/count"
+  let assert Ok(#(200, count_resp_0, _)) = http_get(count_url, [])
+  string.contains(count_resp_0, "\"total\":0") |> should.be_true
+
+  // Send a message from sender to receiver
+  let send =
+    "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"message_send\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"from\":\"sender\",\"kind\":\"finding\",\"summary\":\"test finding\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, send, h)
+
+  // Check count — receiver should have 1 pending
+  let assert Ok(#(200, count_resp_1, _)) = http_get(count_url, [])
+  string.contains(count_resp_1, "\"total\":1") |> should.be_true
+  string.contains(count_resp_1, room_id) |> should.be_true
+
+  // Ack the message via inbox_read + message_ack
+  let read_inbox =
+    "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"inbox_read\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"participant_id\":\"receiver\"}}}"
+  let assert Ok(#(200, inbox_resp, _)) = http_post(mcp_url, read_inbox, h)
+  let assert Ok(msg_id) = extract_json_string(inbox_resp, "message_id")
+
+  let ack =
+    "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"message_ack\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"participant_id\":\"receiver\",\"message_ids\":\""
+    <> msg_id
+    <> "\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(mcp_url, ack, h)
+
+  // Check count after ack — should be back to 0
+  let assert Ok(#(200, count_resp_2, _)) = http_get(count_url, [])
+  string.contains(count_resp_2, "\"total\":0") |> should.be_true
 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +496,14 @@ fn start_test_server() -> Int {
   let tool_defs = tools.all_tools()
   let handler =
     handlers.make_handler(services.registry, services.inbox, services.presence)
-  let assert Ok(_) = http_transport.start_server(tool_defs, handler, port)
+  let assert Ok(_) =
+    http_transport.start_server(
+      tool_defs,
+      handler,
+      port,
+      services.registry,
+      services.presence,
+    )
   // Give the server time to bind
   process.sleep(100)
   port

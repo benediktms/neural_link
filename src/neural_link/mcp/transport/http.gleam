@@ -10,15 +10,20 @@ import gleam/http/response
 import gleam/int
 import gleam/io
 import gleam/json
+import gleam/list
 import gleam/option.{None}
 import gleam/otp/actor
 import gleam/string
 import mist.{type Connection, type ResponseData}
+import neural_link/domain/id.{ParticipantId}
 import neural_link/mcp/codec
 import neural_link/mcp/protocol.{
   type JsonRpcRequest, type ToolDefinition, JsonRpcError,
 }
 import neural_link/mcp/transport.{type ToolCallHandler}
+import neural_link/runtime/presence as presence_mod
+import neural_link/runtime/registry as registry_mod
+import neural_link/runtime/room as room_mod
 
 // ---------------------------------------------------------------------------
 // Session management actor
@@ -122,8 +127,10 @@ pub fn start(
   tools: List(ToolDefinition),
   handler: ToolCallHandler,
   port: Int,
+  registry: Subject(registry_mod.RegistryMessage),
+  presence: Subject(presence_mod.PresenceMessage),
 ) -> Nil {
-  case start_server(tools, handler, port) {
+  case start_server(tools, handler, port, registry, presence) {
     Error(err) -> {
       io.println_error("Failed to start HTTP server: " <> err)
     }
@@ -140,6 +147,8 @@ pub fn start_server(
   tools: List(ToolDefinition),
   handler: ToolCallHandler,
   port: Int,
+  registry: Subject(registry_mod.RegistryMessage),
+  presence: Subject(presence_mod.PresenceMessage),
 ) -> Result(Subject(SessionMessage), String) {
   case start_session_manager() {
     Error(err) -> Error("Failed to start session manager: " <> err)
@@ -148,7 +157,9 @@ pub fn start_server(
         "neural_link MCP HTTP server starting on port " <> int.to_string(port),
       )
       let assert Ok(_) =
-        mist.new(fn(req) { handle_request(req, tools, handler, sessions) })
+        mist.new(fn(req) {
+          handle_request(req, tools, handler, sessions, registry, presence)
+        })
         |> mist.port(port)
         |> mist.start
       Ok(sessions)
@@ -165,13 +176,19 @@ fn handle_request(
   tools: List(ToolDefinition),
   handler: ToolCallHandler,
   sessions: Subject(SessionMessage),
+  registry: Subject(registry_mod.RegistryMessage),
+  presence: Subject(presence_mod.PresenceMessage),
 ) -> response.Response(ResponseData) {
   case req.method, request.path_segments(req) {
     http.Post, ["mcp"] -> handle_mcp_post(req, tools, handler, sessions)
     _, ["mcp"] ->
       response.new(405)
       |> response.set_body(mist.Bytes(bytes_tree.new()))
-    _, ["health"] ->
+    http.Get, ["inbox", participant_id, "count"] ->
+      handle_inbox_count(participant_id, registry, presence)
+    http.Get, ["agent", agent_id, "inbox", "count"] ->
+      handle_agent_inbox_count(agent_id, registry, presence)
+    http.Get, ["health"] ->
       response.new(200)
       |> response.set_body(
         mist.Bytes(bytes_tree.from_string("{\"status\":\"ok\"}")),
@@ -280,6 +297,56 @@ fn route_rpc_request(
   response.new(200)
   |> response.set_body(mist.Bytes(bytes_tree.from_string(result_body)))
   |> response.set_header("content-type", "application/json")
+}
+
+// ---------------------------------------------------------------------------
+// REST: GET /inbox/:participant_id/count
+// ---------------------------------------------------------------------------
+
+fn handle_inbox_count(
+  participant_id: String,
+  registry: Subject(registry_mod.RegistryMessage),
+  presence: Subject(presence_mod.PresenceMessage),
+) -> response.Response(ResponseData) {
+  let pid = ParticipantId(participant_id)
+  case presence_mod.query_participant(presence, pid) {
+    Error(_) -> json_error_response(404, "Participant not found")
+    Ok(entry) -> {
+      let room_counts =
+        list.filter_map(entry.rooms, fn(room_id) {
+          case registry_mod.get_room(registry, room_id) {
+            Error(_) -> Error(Nil)
+            Ok(room_subject) -> {
+              let count = room_mod.inbox_count(room_subject, pid)
+              Ok(#(room_id, count))
+            }
+          }
+        })
+      let total = list.fold(room_counts, 0, fn(acc, pair) { acc + pair.1 })
+      let rooms_json =
+        list.map(room_counts, fn(pair) { #(pair.0, json.int(pair.1)) })
+      let body =
+        json.object([
+          #("total", json.int(total)),
+          #("rooms", json.object(rooms_json)),
+        ])
+        |> json.to_string
+      response.new(200)
+      |> response.set_body(mist.Bytes(bytes_tree.from_string(body)))
+      |> response.set_header("content-type", "application/json")
+    }
+  }
+}
+
+fn handle_agent_inbox_count(
+  agent_id: String,
+  registry: Subject(registry_mod.RegistryMessage),
+  presence: Subject(presence_mod.PresenceMessage),
+) -> response.Response(ResponseData) {
+  case presence_mod.query_agent(presence, agent_id) {
+    Error(_) -> json_error_response(404, "Agent not found")
+    Ok(participant_id) -> handle_inbox_count(participant_id, registry, presence)
+  }
 }
 
 fn json_error_response(

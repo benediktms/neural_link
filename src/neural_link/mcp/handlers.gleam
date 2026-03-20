@@ -227,6 +227,7 @@ fn handle_room_join(
     |> option.unwrap("member")
   let role = parse_role(role_str)
   let p = participant_domain.new(participant_id, display_name, role)
+  let agent_id = get_optional_string_param(params, "agent_id")
   use room_subject <- result.try(registry_mod.get_room(registry, room_id))
   use _ <- result.try(room_mod.join(room_subject, p))
   // Register in presence tracker
@@ -236,6 +237,12 @@ fn handle_room_join(
     room_id,
     300_000,
   )
+  // Register agent_id → participant_id mapping (for PostToolUse hook)
+  case agent_id {
+    Some(aid) ->
+      presence_mod.register_agent(presence, aid, ParticipantId(participant_id))
+    None -> Nil
+  }
   let room_state = room_mod.get_state(room_subject)
   let mode_field = case room_state.interaction_mode {
     Some(m) -> json.string(interaction_mode.mode_to_string(m))

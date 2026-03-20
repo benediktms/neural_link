@@ -29,7 +29,13 @@ fn run_foreground() -> Nil {
         )
       case config.load_transport() {
         config.Http ->
-          http_transport.start(tool_defs, handler, config.load_port())
+          http_transport.start(
+            tool_defs,
+            handler,
+            config.load_port(),
+            services.registry,
+            services.presence,
+          )
         config.Stdio -> stdio_transport.start(tool_defs, handler)
       }
     }

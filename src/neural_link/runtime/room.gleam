@@ -24,6 +24,9 @@ type RoomState {
     receipts: Dict(String, List(Receipt)),
     sequence: Int,
     max_messages: Int,
+    message_count: Int,
+    /// Incremental pending count per participant — O(1) inbox count lookups
+    pending_counts: Dict(String, Int),
   )
 }
 
@@ -77,6 +80,8 @@ pub fn start(room_data: Room) -> actor.StartResult(Subject(RoomMessage)) {
       receipts: dict.new(),
       sequence: 0,
       max_messages: 1000,
+      message_count: 0,
+      pending_counts: dict.new(),
     )
   actor.new(state)
   |> actor.on_message(handle_message)
@@ -166,13 +171,27 @@ fn handle_message(
           let updated_receipts =
             dict.insert(state.receipts, msg_key, new_receipts)
 
+          // Increment pending counts for audience
+          let updated_pending =
+            list.fold(audience, state.pending_counts, fn(acc, pid) {
+              let key = participant_id_to_string(pid)
+              let current = case dict.get(acc, key) {
+                Ok(n) -> n
+                Error(_) -> 0
+              }
+              dict.insert(acc, key, current + 1)
+            })
+
           // Store message (prepend), enforce max
+          let new_count = state.message_count + 1
           let updated_messages = [msg, ..state.messages]
-          let bounded_messages = case
-            list.length(updated_messages) > state.max_messages
-          {
+          let bounded_messages = case new_count > state.max_messages {
             True -> list.take(updated_messages, state.max_messages)
             False -> updated_messages
+          }
+          let bounded_count = case new_count > state.max_messages {
+            True -> state.max_messages
+            False -> new_count
           }
 
           actor.send(reply, Ok(msg))
@@ -182,6 +201,8 @@ fn handle_message(
               messages: bounded_messages,
               receipts: updated_receipts,
               sequence: new_seq,
+              message_count: bounded_count,
+              pending_counts: updated_pending,
             ),
           )
         }
@@ -211,12 +232,19 @@ fn handle_message(
     // -----------------------------------------------------------------------
     AckMessages(participant_id, message_ids, reply) -> {
       let pid_str = participant_id_to_string(participant_id)
-      let updated_receipts =
-        list.fold(message_ids, state.receipts, fn(acc, mid) {
+      let #(updated_receipts, ack_count) =
+        list.fold(message_ids, #(state.receipts, 0), fn(acc, mid) {
+          let #(receipts, count) = acc
           let msg_key = message_id_to_string(mid)
-          case dict.get(acc, msg_key) {
+          case dict.get(receipts, msg_key) {
             Error(_) -> acc
             Ok(receipt_list) -> {
+              // Count how many pending receipts we're acking for this participant
+              let was_pending =
+                list.any(receipt_list, fn(r) {
+                  participant_id_to_string(r.participant_id) == pid_str
+                  && r.status == message.Pending
+                })
               let updated_list =
                 list.map(receipt_list, fn(r) {
                   case participant_id_to_string(r.participant_id) == pid_str {
@@ -224,29 +252,42 @@ fn handle_message(
                     False -> r
                   }
                 })
-              dict.insert(acc, msg_key, updated_list)
+              let new_count = case was_pending {
+                True -> count + 1
+                False -> count
+              }
+              #(dict.insert(receipts, msg_key, updated_list), new_count)
             }
           }
         })
+      // Decrement pending count
+      let updated_pending = case dict.get(state.pending_counts, pid_str) {
+        Error(_) -> state.pending_counts
+        Ok(current) -> {
+          let new_val = case current - ack_count > 0 {
+            True -> current - ack_count
+            False -> 0
+          }
+          dict.insert(state.pending_counts, pid_str, new_val)
+        }
+      }
       actor.send(reply, Ok(Nil))
-      actor.continue(RoomState(..state, receipts: updated_receipts))
+      actor.continue(
+        RoomState(
+          ..state,
+          receipts: updated_receipts,
+          pending_counts: updated_pending,
+        ),
+      )
     }
 
     // -----------------------------------------------------------------------
     CountInbox(participant_id, reply) -> {
       let pid_str = participant_id_to_string(participant_id)
-      let count =
-        list.count(state.messages, fn(msg) {
-          let msg_key = message_id_to_string(msg.message_id)
-          case dict.get(state.receipts, msg_key) {
-            Error(_) -> False
-            Ok(receipt_list) ->
-              list.any(receipt_list, fn(r) {
-                participant_id_to_string(r.participant_id) == pid_str
-                && r.status == message.Pending
-              })
-          }
-        })
+      let count = case dict.get(state.pending_counts, pid_str) {
+        Ok(n) -> n
+        Error(_) -> 0
+      }
       actor.send(reply, count)
       actor.continue(state)
     }

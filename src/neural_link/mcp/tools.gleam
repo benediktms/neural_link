@@ -87,6 +87,12 @@ fn room_join() -> protocol.ToolDefinition {
         description: "Role: owner, member, observer (default: member)",
         required: False,
       ),
+      ToolProperty(
+        name: "agent_id",
+        prop_type: "string",
+        description: "Claude Code agent_id (from SubagentStart hook). Enables inbox nudge via PostToolUse hook.",
+        required: False,
+      ),
     ],
   )
 }

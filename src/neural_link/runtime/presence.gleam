@@ -3,6 +3,7 @@ import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/list
 import gleam/otp/actor
+import gleam/result
 import neural_link/domain/id.{type ParticipantId, participant_id_to_string}
 
 pub type PresenceEntry {
@@ -10,7 +11,11 @@ pub type PresenceEntry {
 }
 
 type PresenceState {
-  PresenceState(entries: Dict(String, PresenceEntry))
+  PresenceState(
+    entries: Dict(String, PresenceEntry),
+    /// Maps Claude Code agent_id → participant_id string
+    agent_map: Dict(String, String),
+  )
 }
 
 pub type PresenceMessage {
@@ -23,11 +28,13 @@ pub type PresenceMessage {
     reply: Subject(Result(PresenceEntry, String)),
   )
   CheckExpired(reply: Subject(List(String)))
+  RegisterAgent(agent_id: String, participant_id: ParticipantId)
+  QueryAgent(agent_id: String, reply: Subject(Result(String, String)))
   Shutdown
 }
 
 pub fn start() -> actor.StartResult(Subject(PresenceMessage)) {
-  actor.new(PresenceState(entries: dict.new()))
+  actor.new(PresenceState(entries: dict.new(), agent_map: dict.new()))
   |> actor.on_message(handle_message)
   |> actor.start
 }
@@ -40,8 +47,7 @@ fn handle_message(
     Register(participant_id, room_id, lease_ms) -> {
       let key = participant_id_to_string(participant_id)
       let now = birl.to_unix_milli(birl.utc_now())
-      let existing = dict.get(state.entries, key)
-      let entry = case existing {
+      let entry = case dict.get(state.entries, key) {
         Ok(e) -> e
         Error(_) -> PresenceEntry(rooms: [], last_seen: now, lease_ms: lease_ms)
       }
@@ -49,51 +55,54 @@ fn handle_message(
         True -> entry.rooms
         False -> [room_id, ..entry.rooms]
       }
-      let updated =
-        PresenceEntry(rooms: rooms, last_seen: now, lease_ms: lease_ms)
+      let updated = PresenceEntry(..entry, rooms: rooms, last_seen: now)
       let entries = dict.insert(state.entries, key, updated)
-      actor.continue(PresenceState(entries: entries))
+      actor.continue(PresenceState(..state, entries: entries))
     }
 
     Heartbeat(participant_id) -> {
       let key = participant_id_to_string(participant_id)
       let now = birl.to_unix_milli(birl.utc_now())
       let entries = case dict.get(state.entries, key) {
-        Ok(entry) -> {
-          let updated =
-            PresenceEntry(
-              rooms: entry.rooms,
-              last_seen: now,
-              lease_ms: entry.lease_ms,
-            )
-          dict.insert(state.entries, key, updated)
-        }
+        Ok(entry) ->
+          dict.insert(
+            state.entries,
+            key,
+            PresenceEntry(..entry, last_seen: now),
+          )
         Error(_) -> state.entries
       }
-      actor.continue(PresenceState(entries: entries))
+      actor.continue(PresenceState(..state, entries: entries))
     }
 
     Unregister(participant_id, room_id) -> {
       let key = participant_id_to_string(participant_id)
-      let entries = case dict.get(state.entries, key) {
+      case dict.get(state.entries, key) {
+        Error(_) -> actor.continue(state)
         Ok(entry) -> {
           let rooms = list.filter(entry.rooms, fn(r) { r != room_id })
           case rooms {
-            [] -> dict.delete(state.entries, key)
+            [] -> {
+              // Participant has no rooms left — clean up entries and agent_map
+              let entries = dict.delete(state.entries, key)
+              let agent_map = purge_agent_entries(state.agent_map, key)
+              actor.continue(PresenceState(
+                entries: entries,
+                agent_map: agent_map,
+              ))
+            }
             _ -> {
-              let updated =
-                PresenceEntry(
-                  rooms: rooms,
-                  last_seen: entry.last_seen,
-                  lease_ms: entry.lease_ms,
+              let entries =
+                dict.insert(
+                  state.entries,
+                  key,
+                  PresenceEntry(..entry, rooms: rooms),
                 )
-              dict.insert(state.entries, key, updated)
+              actor.continue(PresenceState(..state, entries: entries))
             }
           }
         }
-        Error(_) -> state.entries
       }
-      actor.continue(PresenceState(entries: entries))
     }
 
     QueryRoom(room_id, reply) -> {
@@ -110,10 +119,23 @@ fn handle_message(
 
     QueryParticipant(participant_id, reply) -> {
       let key = participant_id_to_string(participant_id)
-      let result = case dict.get(state.entries, key) {
-        Ok(entry) -> Ok(entry)
-        Error(_) -> Error("Participant not found")
-      }
+      let result =
+        dict.get(state.entries, key)
+        |> result.map_error(fn(_) { "Participant not found" })
+      process.send(reply, result)
+      actor.continue(state)
+    }
+
+    RegisterAgent(agent_id, participant_id) -> {
+      let pid_str = participant_id_to_string(participant_id)
+      let agent_map = dict.insert(state.agent_map, agent_id, pid_str)
+      actor.continue(PresenceState(..state, agent_map: agent_map))
+    }
+
+    QueryAgent(agent_id, reply) -> {
+      let result =
+        dict.get(state.agent_map, agent_id)
+        |> result.map_error(fn(_) { "Agent not found" })
       process.send(reply, result)
       actor.continue(state)
     }
@@ -129,12 +151,28 @@ fn handle_message(
             False -> #(exp_acc, dict.insert(rem_acc, key, entry))
           }
         })
+      // Clean agent_map for expired participants
+      let cleaned_agent_map =
+        list.fold(expired, state.agent_map, fn(am, pid) {
+          purge_agent_entries(am, pid)
+        })
       process.send(reply, expired)
-      actor.continue(PresenceState(entries: remaining))
+      actor.continue(PresenceState(
+        entries: remaining,
+        agent_map: cleaned_agent_map,
+      ))
     }
 
     Shutdown -> actor.stop()
   }
+}
+
+/// Remove all agent_map entries pointing to the given participant_id
+fn purge_agent_entries(
+  agent_map: Dict(String, String),
+  participant_id: String,
+) -> Dict(String, String) {
+  dict.filter(agent_map, fn(_agent_id, pid) { pid != participant_id })
 }
 
 pub fn register(
@@ -173,6 +211,21 @@ pub fn query_participant(
   participant_id: ParticipantId,
 ) -> Result(PresenceEntry, String) {
   actor.call(presence, 5000, QueryParticipant(participant_id, _))
+}
+
+pub fn register_agent(
+  presence: Subject(PresenceMessage),
+  agent_id: String,
+  participant_id: ParticipantId,
+) -> Nil {
+  actor.send(presence, RegisterAgent(agent_id, participant_id))
+}
+
+pub fn query_agent(
+  presence: Subject(PresenceMessage),
+  agent_id: String,
+) -> Result(String, String) {
+  actor.call(presence, 5000, QueryAgent(agent_id, _))
 }
 
 pub fn check_expired(presence: Subject(PresenceMessage)) -> List(String) {

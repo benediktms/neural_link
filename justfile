@@ -67,6 +67,49 @@ check:
 
 alias c := check
 
+# ── Hooks ──────────────────────────────────────
+
+[group('setup')]
+install-hooks:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    SETTINGS="$HOME/.claude/settings.json"
+    SCRIPTS="{{justfile_directory()}}/scripts/hooks"
+    # Ensure settings file exists
+    mkdir -p "$(dirname "$SETTINGS")"
+    [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+    # Hook definitions to inject
+    SUBAGENT_START='{"matcher":"","hooks":[{"type":"command","command":"'"$SCRIPTS"'/subagent_start_state.sh","timeout":2000}]}'
+    POST_TOOL_USE='{"matcher":"","hooks":[{"type":"command","command":"'"$SCRIPTS"'/post_tool_inbox_check.sh","timeout":2000}]}'
+    # Remove any existing neural_link hooks, then add fresh ones
+    # Filter matches exact script names to avoid removing unrelated hooks
+    jq --argjson ss "$SUBAGENT_START" --argjson ptu "$POST_TOOL_USE" '
+      def is_neural_link_hook: (.hooks[0].command // "") | test("scripts/hooks/(subagent_start_state|post_tool_inbox_check)\\.sh$");
+      .hooks.SubagentStart = ((.hooks.SubagentStart // []) | map(select(is_neural_link_hook | not))) |
+      .hooks.PostToolUse = ((.hooks.PostToolUse // []) | map(select(is_neural_link_hook | not))) |
+      .hooks.SubagentStart += [$ss] |
+      .hooks.PostToolUse += [$ptu]
+    ' "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
+    echo "✓ SubagentStart hook installed"
+    echo "✓ PostToolUse hook installed"
+    echo "  Settings: $SETTINGS"
+
+[group('setup')]
+uninstall-hooks:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    SETTINGS="$HOME/.claude/settings.json"
+    [ -f "$SETTINGS" ] || { echo "No settings file found"; exit 0; }
+    jq '
+      def is_neural_link_hook: (.hooks[0].command // "") | test("scripts/hooks/(subagent_start_state|post_tool_inbox_check)\\.sh$");
+      .hooks.SubagentStart = ((.hooks.SubagentStart // []) | map(select(is_neural_link_hook | not))) |
+      .hooks.PostToolUse = ((.hooks.PostToolUse // []) | map(select(is_neural_link_hook | not))) |
+      if .hooks.SubagentStart == [] then del(.hooks.SubagentStart) else . end |
+      if .hooks.PostToolUse == [] then del(.hooks.PostToolUse) else . end |
+      if .hooks == {} then del(.hooks) else . end
+    ' "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
+    echo "✓ neural_link hooks removed from $SETTINGS"
+
 # ── Cleanup ────────────────────────────────────
 
 [group('dev')]

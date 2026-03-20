@@ -12,7 +12,7 @@ src/neural_link/
 └── mcp/             # MCP server: protocol, codec, transport, tools, handlers
 ```
 
-**Domain** — Immutable types defining rooms, messages (10 kinds), participants, threads, receipts, and wait filters. No side effects.
+**Domain** — Immutable types defining rooms, messages (12 kinds), participants, threads, receipts, and wait filters. No side effects.
 
 **Runtime** — OTP actor tree. Registry manages room lifecycle. Each Room actor holds live state: messages, receipts, pending waits. Inbox manages cross-room wait registrations. Presence tracks participant leases.
 
@@ -45,7 +45,7 @@ gleam run
 |---|---|
 | `room_open` | Create a new coordination room |
 | `room_join` | Add a participant to a room |
-| `message_send` | Send a typed message (10 kinds: question, answer, finding, handoff, blocker, decision, review_request, review_result, artifact_ref, summary) |
+| `message_send` | Send a typed message (12 kinds: question, answer, finding, handoff, blocker, decision, review_request, review_result, artifact_ref, summary, challenge, proposal) |
 | `inbox_read` | Read a participant's inbox for a room |
 | `message_ack` | Acknowledge messages (participant-scoped) |
 | `wait_for` | Block until a matching message arrives |
@@ -104,7 +104,7 @@ Room open/close events are always persisted.
 - No message encryption or editing
 - `thread_summarize` returns concatenated summaries (no LLM summarization)
 - `wait_for` timeout not enforced at actor level (MCP layer handles client timeouts)
-- stdio MCP transport only (no HTTP/SSE)
+- stdio and HTTP MCP transports (no SSE)
 
 ## License
 
