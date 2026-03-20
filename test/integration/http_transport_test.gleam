@@ -95,6 +95,55 @@ pub fn http_room_lifecycle_test() {
   string.contains(open_resp, "HTTP Test Room") |> should.be_true
 }
 
+pub fn http_message_send_includes_inbox_pending_test() {
+  let port = start_test_server()
+  let url = "http://localhost:" <> int.to_string(port) <> "/mcp"
+
+  // Initialize
+  let assert Ok(#(200, _, init_headers)) =
+    http_post(
+      url,
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+      [],
+    )
+  let assert Ok(sid) = find_header(init_headers, "mcp-session-id")
+  let h = [#("mcp-session-id", sid)]
+
+  // Open room
+  let assert Ok(#(200, open_resp, _)) =
+    http_post(
+      url,
+      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Nudge Test\"}}}",
+      h,
+    )
+  // Extract room_id from response
+  let assert Ok(room_id) = extract_json_string(open_resp, "room_id")
+
+  // Join two participants
+  let join_a =
+    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"room_join\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"participant_id\":\"a\",\"display_name\":\"A\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(url, join_a, h)
+  let join_b =
+    "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"room_join\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"participant_id\":\"b\",\"display_name\":\"B\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(url, join_b, h)
+
+  // A sends a message — response should contain _inbox_pending: 0
+  // (A has no pending messages for itself)
+  let send =
+    "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"message_send\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"from\":\"a\",\"kind\":\"finding\",\"summary\":\"test\"}}}"
+  let assert Ok(#(200, send_resp, _)) = http_post(url, send, h)
+  // MCP wraps in escaped JSON — check for escaped field name
+  string.contains(send_resp, "_inbox_pending") |> should.be_true
+  // Sender's own pending count is 0 (escaped integer in MCP content)
+  string.contains(send_resp, "\\\"_inbox_pending\\\":0") |> should.be_true
+}
+
 pub fn http_health_endpoint_test() {
   let port = start_test_server()
   let url = "http://localhost:" <> int.to_string(port) <> "/health"
@@ -126,6 +175,21 @@ fn erlang_abs(n: Int) -> Int {
   case n < 0 {
     True -> -n
     False -> n
+  }
+}
+
+/// Extract a string value from an MCP tool response by key.
+/// MCP wraps tool output in a content block with escaped JSON, so we search
+/// for the escaped pattern: \"key\":\"value\"
+fn extract_json_string(body: String, key: String) -> Result(String, Nil) {
+  let pattern = "\\\"" <> key <> "\\\":\\\""
+  case string.split(body, pattern) {
+    [_, rest, ..] ->
+      case string.split(rest, "\\\"") {
+        [value, ..] -> Ok(value)
+        _ -> Error(Nil)
+      }
+    _ -> Error(Nil)
   }
 }
 

@@ -205,7 +205,55 @@ pub fn receipt_isolation_across_participants_test() {
   let c_inbox_after = room.read_inbox(room_subject, id.ParticipantId("c"))
   list.length(c_inbox_after) |> should.equal(1)
 
-  // B still sees the message too (read_inbox does not filter by ack status at actor level)
+  // B no longer sees the message (read_inbox filters by pending status)
   let b_inbox_after = room.read_inbox(room_subject, id.ParticipantId("b"))
-  list.length(b_inbox_after) |> should.equal(1)
+  list.length(b_inbox_after) |> should.equal(0)
+}
+
+pub fn inbox_count_tracks_pending_messages_test() {
+  let assert Ok(started) = registry.start()
+  let reg = started.data
+  let assert Ok(room_data) =
+    registry.create_room(reg, "Inbox Count Test", None, None, [], [], None)
+  let id.RoomId(room_id) = room_data.id
+  let assert Ok(room_subject) = registry.get_room(reg, room_id)
+
+  // Join 2 participants
+  let assert Ok(Nil) =
+    room.join(room_subject, participant.new("a", "A", participant.Member))
+  let assert Ok(Nil) =
+    room.join(room_subject, participant.new("b", "B", participant.Member))
+
+  // Initially zero
+  room.inbox_count(room_subject, id.ParticipantId("b")) |> should.equal(0)
+
+  // A sends a message — B's count becomes 1
+  let assert Ok(msg1) =
+    room.send_msg(
+      room_subject,
+      id.ParticipantId("a"),
+      [],
+      message.Finding,
+      "First finding",
+    )
+  room.inbox_count(room_subject, id.ParticipantId("b")) |> should.equal(1)
+
+  // A sends another — B's count becomes 2
+  let assert Ok(_msg2) =
+    room.send_msg(
+      room_subject,
+      id.ParticipantId("a"),
+      [],
+      message.Finding,
+      "Second finding",
+    )
+  room.inbox_count(room_subject, id.ParticipantId("b")) |> should.equal(2)
+
+  // B acks first message — count drops to 1
+  let assert Ok(Nil) =
+    room.ack_messages(room_subject, id.ParticipantId("b"), [msg1.message_id])
+  room.inbox_count(room_subject, id.ParticipantId("b")) |> should.equal(1)
+
+  // Sender never has pending messages for own broadcast
+  room.inbox_count(room_subject, id.ParticipantId("a")) |> should.equal(0)
 }

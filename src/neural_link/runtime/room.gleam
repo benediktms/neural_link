@@ -57,6 +57,7 @@ pub type RoomMessage {
 
   // Query
   GetMessages(thread_id: Option(ThreadId), reply: Subject(List(Message)))
+  CountInbox(participant_id: ParticipantId, reply: Subject(Int))
 
   // Lifecycle
   CloseRoom(resolution: RoomResolution, reply: Subject(Result(Nil, String)))
@@ -190,7 +191,7 @@ fn handle_message(
     // -----------------------------------------------------------------------
     ReadInbox(participant_id, reply) -> {
       let pid_str = participant_id_to_string(participant_id)
-      // Collect message_ids where participant has a receipt
+      // Collect messages where participant has a pending (unacked) receipt
       let inbox =
         list.filter(state.messages, fn(msg) {
           let msg_key = message_id_to_string(msg.message_id)
@@ -199,6 +200,7 @@ fn handle_message(
             Ok(receipt_list) ->
               list.any(receipt_list, fn(r) {
                 participant_id_to_string(r.participant_id) == pid_str
+                && r.status == message.Pending
               })
           }
         })
@@ -228,6 +230,25 @@ fn handle_message(
         })
       actor.send(reply, Ok(Nil))
       actor.continue(RoomState(..state, receipts: updated_receipts))
+    }
+
+    // -----------------------------------------------------------------------
+    CountInbox(participant_id, reply) -> {
+      let pid_str = participant_id_to_string(participant_id)
+      let count =
+        list.count(state.messages, fn(msg) {
+          let msg_key = message_id_to_string(msg.message_id)
+          case dict.get(state.receipts, msg_key) {
+            Error(_) -> False
+            Ok(receipt_list) ->
+              list.any(receipt_list, fn(r) {
+                participant_id_to_string(r.participant_id) == pid_str
+                && r.status == message.Pending
+              })
+          }
+        })
+      actor.send(reply, count)
+      actor.continue(state)
     }
 
     // -----------------------------------------------------------------------
@@ -324,6 +345,13 @@ pub fn ack_messages(
   actor.call(room, 5000, fn(reply) {
     AckMessages(participant_id, message_ids, reply)
   })
+}
+
+pub fn inbox_count(
+  room: Subject(RoomMessage),
+  participant_id: ParticipantId,
+) -> Int {
+  actor.call(room, 5000, fn(reply) { CountInbox(participant_id, reply) })
 }
 
 pub fn close_room(

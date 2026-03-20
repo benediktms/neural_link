@@ -128,17 +128,36 @@ fn split_comma(s: String) -> List(String) {
 // Encode message to JSON
 // ---------------------------------------------------------------------------
 
-fn encode_message(msg: message.Message) -> json.Json {
+fn message_fields(msg: message.Message) -> List(#(String, json.Json)) {
   let mid = message_id_to_string(msg.message_id)
   let from = participant_id_to_string(msg.from)
   let kind_str = message.kind_to_string(msg.kind)
-  json.object([
+  [
     #("message_id", json.string(mid)),
     #("from", json.string(from)),
     #("kind", json.string(kind_str)),
     #("summary", json.string(msg.summary)),
     #("sequence", json.int(msg.sequence)),
-  ])
+  ]
+}
+
+fn encode_message(msg: message.Message) -> json.Json {
+  json.object(message_fields(msg))
+}
+
+// ---------------------------------------------------------------------------
+// Inbox nudge helper
+// ---------------------------------------------------------------------------
+
+/// Query pending inbox count for a participant in a room and append
+/// `_inbox_pending` to the response fields.
+fn with_inbox_nudge(
+  room_subject: Subject(room_mod.RoomMessage),
+  participant_id: String,
+  fields: List(#(String, json.Json)),
+) -> json.Json {
+  let count = room_mod.inbox_count(room_subject, ParticipantId(participant_id))
+  json.object(list.append(fields, [#("_inbox_pending", json.int(count))]))
 }
 
 // ---------------------------------------------------------------------------
@@ -277,7 +296,7 @@ fn handle_message_send(
   let mid = message_id_to_string(msg.message_id)
   let id.RoomId(rid) = msg.room_id
   Ok(
-    json.object([
+    with_inbox_nudge(room_subject, from_str, [
       #("message_id", json.string(mid)),
       #("room_id", json.string(rid)),
       #("sequence", json.int(msg.sequence)),
@@ -326,7 +345,11 @@ fn handle_message_ack(
     |> list.map(MessageId)
   use room_subject <- result.try(registry_mod.get_room(registry, room_id))
   use _ <- result.try(room_mod.ack_messages(room_subject, pid, mids))
-  Ok(json.object([#("acked", json.bool(True))]))
+  Ok(
+    with_inbox_nudge(room_subject, participant_id_str, [
+      #("acked", json.bool(True)),
+    ]),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -395,14 +418,17 @@ fn handle_wait_for(
     list.find(list.reverse(messages), fn(m) {
       m.sequence > since_seq && wait.matches_filter(filter, m.kind, m.from)
     })
+  let nudge = fn(msg) {
+    with_inbox_nudge(room_subject, participant_id_str, message_fields(msg))
+  }
   case existing_match {
-    Ok(msg) -> Ok(encode_message(msg))
+    Ok(msg) -> Ok(nudge(msg))
     Error(_) -> {
       // No immediate match — register wait with inbox (non-blocking for inbox)
       let wait_result =
         inbox_mod.register_wait(inbox, pid, filter, since_seq, timeout_ms)
       case wait_result {
-        Ok(msg) -> Ok(encode_message(msg))
+        Ok(msg) -> Ok(nudge(msg))
         Error(e) -> Error(e)
       }
     }
