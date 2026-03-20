@@ -20,6 +20,8 @@ pub type MessageKind {
   ReviewResult
   ArtifactRef
   Summary
+  Challenge
+  Proposal
 }
 
 pub type PersistHint {
@@ -89,13 +91,16 @@ pub fn kind_to_string(kind: MessageKind) -> String {
     ReviewResult -> "review_result"
     ArtifactRef -> "artifact_ref"
     Summary -> "summary"
+    Challenge -> "challenge"
+    Proposal -> "proposal"
   }
 }
 
 /// True for message kinds that carry durable collective memory.
 pub fn is_durable(kind: MessageKind) -> Bool {
   case kind {
-    Decision | Blocker | Handoff | ReviewResult | Summary -> True
+    Decision | Blocker | Handoff | ReviewResult | Summary | Challenge | Proposal ->
+      True
     _ -> False
   }
 }

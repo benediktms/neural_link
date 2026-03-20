@@ -15,6 +15,7 @@ import neural_link/domain/id.{
   MessageId, ParticipantId, ThreadId, message_id_to_string,
   participant_id_to_string,
 }
+import neural_link/domain/interaction_mode
 import neural_link/domain/message
 import neural_link/domain/participant as participant_domain
 import neural_link/domain/room as domain_room
@@ -93,6 +94,8 @@ fn parse_kind(s: String) -> Result(message.MessageKind, String) {
     "review_result" -> Ok(message.ReviewResult)
     "artifact_ref" -> Ok(message.ArtifactRef)
     "summary" -> Ok(message.Summary)
+    "challenge" -> Ok(message.Challenge)
+    "proposal" -> Ok(message.Proposal)
     _ -> Error("Unknown message kind: " <> s)
   }
 }
@@ -158,6 +161,14 @@ fn handle_room_open(
     get_optional_string_param(params, "brains")
     |> option.map(split_comma)
     |> option.unwrap([])
+  let mode =
+    get_optional_string_param(params, "interaction_mode")
+    |> option.then(fn(s) {
+      case interaction_mode.mode_from_string(s) {
+        Ok(m) -> Some(m)
+        Error(_) -> None
+      }
+    })
   use room <- result.try(registry_mod.create_room(
     registry,
     title,
@@ -165,6 +176,7 @@ fn handle_room_open(
     external_ref,
     tags,
     brains,
+    mode,
   ))
   // Fire-and-forget brain bridge per declared brain
   fire_brain_bridge(room.brains, fn(cfg) { bridge.on_room_open(cfg, room) })
@@ -205,11 +217,17 @@ fn handle_room_join(
     room_id,
     300_000,
   )
+  let room_state = room_mod.get_state(room_subject)
+  let mode_field = case room_state.interaction_mode {
+    Some(m) -> json.string(interaction_mode.mode_to_string(m))
+    None -> json.null()
+  }
   Ok(
     json.object([
       #("room_id", json.string(room_id)),
       #("participant_id", json.string(participant_id)),
       #("joined", json.bool(True)),
+      #("interaction_mode", mode_field),
     ]),
   )
 }
@@ -446,11 +464,42 @@ fn handle_room_close(
   fire_brain_bridge(room_state.brains, fn(cfg) {
     bridge.on_room_close(cfg, closed_room, message_count, duration_ms)
   })
+  // Compute compliance if interaction mode is set
+  let compliance_fields = case room_state.interaction_mode {
+    Some(mode) -> {
+      let sorted_messages =
+        list.sort(messages, fn(a, b) { int.compare(a.sequence, b.sequence) })
+      let report =
+        interaction_mode.compute_compliance(
+          sorted_messages,
+          room_state.participants,
+          mode,
+        )
+      [
+        #(
+          "interaction_mode",
+          json.string(interaction_mode.mode_to_string(mode)),
+        ),
+        #(
+          "compliance",
+          json.object([
+            #("expectations_checked", json.int(report.expectations_checked)),
+            #("expectations_fulfilled", json.int(report.expectations_fulfilled)),
+            #(
+              "unchallenged_findings",
+              json.array(report.unchallenged_findings, json.int),
+            ),
+          ]),
+        ),
+      ]
+    }
+    None -> []
+  }
   Ok(
     json.object([
       #("room_id", json.string(room_id)),
       #("status", json.string("closed")),
-      ..extraction_fields(conv)
+      ..list.append(extraction_fields(conv), compliance_fields)
     ]),
   )
 }

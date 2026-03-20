@@ -48,6 +48,12 @@ fn room_open() -> protocol.ToolDefinition {
         description: "Comma-separated brain names for event persistence",
         required: False,
       ),
+      ToolProperty(
+        name: "interaction_mode",
+        prop_type: "string",
+        description: "Interaction mode: adversarial, informative, deliberative, supervisory. Governs expected communication patterns and compliance tracking at room close.",
+        required: False,
+      ),
     ],
   )
 }
@@ -105,7 +111,7 @@ fn message_send() -> protocol.ToolDefinition {
       ToolProperty(
         name: "kind",
         prop_type: "string",
-        description: "Message kind: question, answer, finding, handoff, blocker, decision, review_request, review_result, artifact_ref, summary",
+        description: "Message kind: question, answer, finding, handoff, blocker, decision, review_request, review_result, artifact_ref, summary, challenge, proposal",
         required: True,
       ),
       ToolProperty(
@@ -259,7 +265,7 @@ fn thread_summarize() -> protocol.ToolDefinition {
 fn room_close() -> protocol.ToolDefinition {
   ToolDefinition(
     name: "room_close",
-    description: "Close a coordination room. Persists the full conversation as a brain artifact and returns structured extraction (decisions, open questions, unresolved blockers, artifact record ID).",
+    description: "Close a coordination room. Persists the full conversation as a brain artifact and returns structured extraction (decisions, open questions, unresolved blockers, artifact record ID). If interaction_mode was set, also returns compliance data.",
     properties: [
       ToolProperty(
         name: "room_id",

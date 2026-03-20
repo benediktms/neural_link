@@ -4,6 +4,7 @@ import gleam/option.{type Option, None, Some}
 import neural_link/domain/id.{
   type ParticipantId, type RoomId, ParticipantId, RoomId,
 }
+import neural_link/domain/interaction_mode.{type InteractionMode}
 import neural_link/domain/participant.{type Participant}
 
 pub type RoomStatus {
@@ -33,6 +34,7 @@ pub type Room {
     tags: List(String),
     brains: List(String),
     resolution: Option(RoomResolution),
+    interaction_mode: Option(InteractionMode),
   )
 }
 
@@ -49,6 +51,7 @@ pub fn new(id: String, title: String) -> Room {
     tags: [],
     brains: [],
     resolution: None,
+    interaction_mode: None,
   )
 }
 
@@ -59,6 +62,7 @@ pub fn new_with_metadata(
   external_ref: Option(String),
   tags: List(String),
   brains: List(String),
+  interaction_mode: Option(InteractionMode),
 ) -> Room {
   Room(
     id: RoomId(id),
@@ -72,6 +76,7 @@ pub fn new_with_metadata(
     tags: tags,
     brains: brains,
     resolution: None,
+    interaction_mode: interaction_mode,
   )
 }
 

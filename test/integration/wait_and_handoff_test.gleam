@@ -16,7 +16,7 @@ pub fn wait_for_resolves_on_matching_message_test() {
   let assert Ok(inbox_started) = inbox.start()
   let inbox_subject = inbox_started.data
   let assert Ok(room_data) =
-    registry.create_room(reg, "Wait Test", None, None, [], [])
+    registry.create_room(reg, "Wait Test", None, None, [], [], None)
   let id.RoomId(room_id) = room_data.id
   let assert Ok(room_subject) = registry.get_room(reg, room_id)
 
@@ -71,7 +71,7 @@ pub fn wait_for_immediate_match_test() {
   let reg = reg_started.data
   let assert Ok(_inbox_started) = inbox.start()
   let assert Ok(room_data) =
-    registry.create_room(reg, "Immediate Match Test", None, None, [], [])
+    registry.create_room(reg, "Immediate Match Test", None, None, [], [], None)
   let id.RoomId(room_id) = room_data.id
   let assert Ok(room_subject) = registry.get_room(reg, room_id)
 
@@ -114,7 +114,7 @@ pub fn handoff_message_workflow_test() {
   let assert Ok(started) = registry.start()
   let reg = started.data
   let assert Ok(room_data) =
-    registry.create_room(reg, "Handoff Test", None, None, [], [])
+    registry.create_room(reg, "Handoff Test", None, None, [], [], None)
   let id.RoomId(room_id) = room_data.id
   let assert Ok(room_subject) = registry.get_room(reg, room_id)
 
@@ -159,7 +159,15 @@ pub fn receipt_isolation_across_participants_test() {
   let assert Ok(started) = registry.start()
   let reg = started.data
   let assert Ok(room_data) =
-    registry.create_room(reg, "Receipt Isolation Test", None, None, [], [])
+    registry.create_room(
+      reg,
+      "Receipt Isolation Test",
+      None,
+      None,
+      [],
+      [],
+      None,
+    )
   let id.RoomId(room_id) = room_data.id
   let assert Ok(room_subject) = registry.get_room(reg, room_id)
 

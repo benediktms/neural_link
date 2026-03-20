@@ -3,6 +3,7 @@ import gleam/erlang/process.{type Subject}
 import gleam/option.{type Option}
 import gleam/otp/actor
 import neural_link/domain/id
+import neural_link/domain/interaction_mode.{type InteractionMode}
 import neural_link/domain/room.{type Room} as domain_room
 import neural_link/runtime/room.{
   type RoomMessage, Shutdown as RoomShutdown, start as start_room,
@@ -15,6 +16,7 @@ pub type RegistryMessage {
     external_ref: Option(String),
     tags: List(String),
     brains: List(String),
+    interaction_mode: Option(InteractionMode),
     reply: Subject(Result(Room, String)),
   )
   GetRoom(room_id: String, reply: Subject(Result(Subject(RoomMessage), String)))
@@ -37,7 +39,15 @@ fn handle_message(
   msg: RegistryMessage,
 ) -> actor.Next(State, RegistryMessage) {
   case msg {
-    CreateRoom(title, purpose, external_ref, tags, brains, reply) -> {
+    CreateRoom(
+      title,
+      purpose,
+      external_ref,
+      tags,
+      brains,
+      interaction_mode,
+      reply,
+    ) -> {
       let room_id = id.generate("room_")
       let room_data =
         domain_room.new_with_metadata(
@@ -47,6 +57,7 @@ fn handle_message(
           external_ref,
           tags,
           brains,
+          interaction_mode,
         )
       case start_room(room_data) {
         Ok(started) -> {
@@ -104,9 +115,18 @@ pub fn create_room(
   external_ref: Option(String),
   tags: List(String),
   brains: List(String),
+  interaction_mode: Option(InteractionMode),
 ) -> Result(Room, String) {
   actor.call(registry, 5000, fn(reply) {
-    CreateRoom(title, purpose, external_ref, tags, brains, reply)
+    CreateRoom(
+      title,
+      purpose,
+      external_ref,
+      tags,
+      brains,
+      interaction_mode,
+      reply,
+    )
   })
 }
 
