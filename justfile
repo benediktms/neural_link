@@ -25,6 +25,7 @@ install: build
     claude mcp remove neural_link 2>/dev/null || true
     claude mcp add -s user -t http neural_link http://localhost:{{default_port}}/mcp
     @echo "Registered: neural_link MCP (http://localhost:{{default_port}}/mcp)"
+    nlk start
 
 [group('setup')]
 uninstall:
