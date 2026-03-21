@@ -1,6 +1,6 @@
 import gleam/erlang/process
 import gleam/list
-import gleam/option.{None}
+import gleam/option.{None, Some}
 import gleeunit/should
 import neural_link/domain/id
 import neural_link/domain/message
@@ -57,6 +57,7 @@ pub fn wait_for_resolves_on_matching_message_test() {
       filter,
       0,
       5000,
+      Some(room_data.id),
     )
 
   // Should resolve with the answer

@@ -118,3 +118,48 @@ pub fn participant_count(room: Room) -> Int {
 pub fn is_closed(room: Room) -> Bool {
   room.status == Closed
 }
+
+pub fn depart_participant(room: Room, id: ParticipantId) -> Room {
+  let ParticipantId(target) = id
+  Room(
+    ..room,
+    participants: list.map(room.participants, fn(p) {
+      let ParticipantId(pid) = p.id
+      case pid == target {
+        True -> participant.set_status(p, participant.Departed)
+        False -> p
+      }
+    }),
+  )
+}
+
+pub fn set_participant_draining(room: Room, id: ParticipantId) -> Room {
+  let ParticipantId(target) = id
+  Room(
+    ..room,
+    participants: list.map(room.participants, fn(p) {
+      let ParticipantId(pid) = p.id
+      case pid == target {
+        True -> participant.set_status(p, participant.Draining)
+        False -> p
+      }
+    }),
+  )
+}
+
+pub fn active_participants(room: Room) -> List(Participant) {
+  list.filter(room.participants, participant.is_active)
+}
+
+pub fn find_lead(room: Room) -> Option(Participant) {
+  list.find(room.participants, participant.is_lead)
+  |> option.from_result
+}
+
+pub fn is_lead(room: Room, id: ParticipantId) -> Bool {
+  let ParticipantId(target) = id
+  list.any(room.participants, fn(p) {
+    let ParticipantId(pid) = p.id
+    pid == target && participant.is_lead(p)
+  })
+}

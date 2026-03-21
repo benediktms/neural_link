@@ -44,7 +44,7 @@ pub fn http_initialize_returns_session_test() {
   session_id |> should.be_ok
 }
 
-pub fn http_tools_list_returns_8_tools_test() {
+pub fn http_tools_list_returns_9_tools_test() {
   let port = start_test_server()
   let url = "http://localhost:" <> int.to_string(port) <> "/mcp"
 
@@ -94,7 +94,7 @@ pub fn http_room_lifecycle_test() {
   let assert Ok(#(200, open_resp, _)) =
     http_post(
       url,
-      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"HTTP Test Room\"}}}",
+      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"HTTP Test Room\",\"participant_id\":\"lead\",\"display_name\":\"Lead\"}}}",
       h,
     )
   string.contains(open_resp, "room_id") |> should.be_true
@@ -119,7 +119,7 @@ pub fn http_message_send_includes_inbox_pending_test() {
   let assert Ok(#(200, open_resp, _)) =
     http_post(
       url,
-      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Nudge Test\"}}}",
+      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Nudge Test\",\"participant_id\":\"lead\",\"display_name\":\"Lead\"}}}",
       h,
     )
   // Extract room_id from response
@@ -188,7 +188,7 @@ pub fn http_agent_inbox_count_tracks_via_agent_id_test() {
   let assert Ok(#(200, open_resp, _)) =
     http_post(
       mcp_url,
-      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Agent ID Test\"}}}",
+      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Agent ID Test\",\"participant_id\":\"lead\",\"display_name\":\"Lead\"}}}",
       h,
     )
   let assert Ok(room_id) = extract_json_string(open_resp, "room_id")
@@ -244,7 +244,7 @@ pub fn http_concurrent_agents_isolated_inbox_counts_test() {
   let assert Ok(#(200, open_resp, _)) =
     http_post(
       mcp_url,
-      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Concurrency Test\"}}}",
+      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Concurrency Test\",\"participant_id\":\"lead\",\"display_name\":\"Lead\"}}}",
       h,
     )
   let assert Ok(room_id) = extract_json_string(open_resp, "room_id")
@@ -334,7 +334,7 @@ pub fn http_agent_id_isolation_across_rooms_test() {
   let assert Ok(#(200, open1, _)) =
     http_post(
       mcp_url,
-      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Room A\"}}}",
+      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Room A\",\"participant_id\":\"lead-a\",\"display_name\":\"Lead A\"}}}",
       h,
     )
   let assert Ok(room_a) = extract_json_string(open1, "room_id")
@@ -342,7 +342,7 @@ pub fn http_agent_id_isolation_across_rooms_test() {
   let assert Ok(#(200, open2, _)) =
     http_post(
       mcp_url,
-      "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Room B\"}}}",
+      "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Room B\",\"participant_id\":\"lead-b\",\"display_name\":\"Lead B\"}}}",
       h,
     )
   let assert Ok(room_b) = extract_json_string(open2, "room_id")
@@ -431,7 +431,7 @@ pub fn http_inbox_count_tracks_pending_messages_test() {
   let assert Ok(#(200, open_resp, _)) =
     http_post(
       mcp_url,
-      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Count Test\"}}}",
+      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Count Test\",\"participant_id\":\"lead\",\"display_name\":\"Lead\"}}}",
       h,
     )
   let assert Ok(room_id) = extract_json_string(open_resp, "room_id")

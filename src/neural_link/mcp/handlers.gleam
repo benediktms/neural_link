@@ -38,8 +38,9 @@ pub fn make_handler(
 ) -> transport.ToolCallHandler {
   fn(tool_name: String, arguments: Option(Dynamic)) -> Result(json.Json, String) {
     case tool_name {
-      "room_open" -> handle_room_open(registry, arguments)
+      "room_open" -> handle_room_open(registry, presence, arguments)
       "room_join" -> handle_room_join(registry, presence, arguments)
+      "room_leave" -> handle_room_leave(registry, inbox, presence, arguments)
       "message_send" -> handle_message_send(registry, inbox, arguments)
       "inbox_read" -> handle_inbox_read(registry, arguments)
       "message_ack" -> handle_message_ack(registry, arguments)
@@ -96,6 +97,7 @@ fn parse_kind(s: String) -> Result(message.MessageKind, String) {
     "summary" -> Ok(message.Summary)
     "challenge" -> Ok(message.Challenge)
     "proposal" -> Ok(message.Proposal)
+    "escalation" -> Ok(message.Escalation)
     _ -> Error("Unknown message kind: " <> s)
   }
 }
@@ -114,6 +116,7 @@ fn parse_role(s: String) -> participant_domain.ParticipantRole {
   case string.lowercase(s) {
     "owner" -> participant_domain.Owner
     "observer" -> participant_domain.Observer
+    // "lead" falls through to Member — lead is auto-assigned via room_open
     _ -> participant_domain.Member
   }
 }
@@ -166,10 +169,13 @@ fn with_inbox_nudge(
 
 fn handle_room_open(
   registry: Subject(registry_mod.RegistryMessage),
+  presence: Subject(presence_mod.PresenceMessage),
   arguments: Option(Dynamic),
 ) -> Result(json.Json, String) {
   use params <- result.try(require_params(arguments))
   use title <- result.try(get_string_param(params, "title"))
+  use pid_str <- result.try(get_string_param(params, "participant_id"))
+  use display_name <- result.try(get_string_param(params, "display_name"))
   let purpose = get_optional_string_param(params, "purpose")
   let external_ref = get_optional_string_param(params, "external_ref")
   let tags =
@@ -200,11 +206,19 @@ fn handle_room_open(
   // Fire-and-forget brain bridge per declared brain
   fire_brain_bridge(room.brains, fn(cfg) { bridge.on_room_open(cfg, room) })
   let id.RoomId(room_id_str) = room.id
+  // Auto-join opener as Lead
+  let lead =
+    participant_domain.new(pid_str, display_name, participant_domain.Lead)
+  use room_subject <- result.try(registry_mod.get_room(registry, room_id_str))
+  use _ <- result.try(room_mod.join(room_subject, lead))
+  presence_mod.register(presence, ParticipantId(pid_str), room_id_str, 300_000)
   Ok(
     json.object([
       #("room_id", json.string(room_id_str)),
       #("title", json.string(room.title)),
       #("status", json.string("open")),
+      #("participant_id", json.string(pid_str)),
+      #("role", json.string("lead")),
     ]),
   )
 }
@@ -254,6 +268,113 @@ fn handle_room_join(
       #("participant_id", json.string(participant_id)),
       #("joined", json.bool(True)),
       #("interaction_mode", mode_field),
+    ]),
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Handler: room_leave
+// ---------------------------------------------------------------------------
+
+fn handle_room_leave(
+  registry: Subject(registry_mod.RegistryMessage),
+  inbox: Subject(inbox_mod.InboxMessage),
+  presence: Subject(presence_mod.PresenceMessage),
+  arguments: Option(Dynamic),
+) -> Result(json.Json, String) {
+  use params <- result.try(require_params(arguments))
+  use room_id <- result.try(get_string_param(params, "room_id"))
+  use pid_str <- result.try(get_string_param(params, "participant_id"))
+  let pid = ParticipantId(pid_str)
+  let timeout_ms = {
+    let raw =
+      get_optional_string_param(params, "timeout_ms")
+      |> option.then(fn(s) {
+        case int.parse(s) {
+          Ok(n) -> Some(n)
+          Error(_) -> None
+        }
+      })
+      |> option.unwrap(30_000)
+    int.min(raw, 120_000)
+  }
+  use room_subject <- result.try(registry_mod.get_room(registry, room_id))
+  let drain_subject = process.new_subject()
+  use leave_result <- result.try(room_mod.leave(
+    room_subject,
+    pid,
+    drain_subject,
+  ))
+  // Resolve drain
+  let drain_completed = case leave_result {
+    room_mod.Departed -> True
+    room_mod.DrainStarted(_) -> {
+      case process.receive(drain_subject, timeout_ms) {
+        Ok(Nil) -> True
+        Error(Nil) -> {
+          // Timeout — force departure
+          let _ = room_mod.force_departure(room_subject, pid)
+          False
+        }
+      }
+    }
+  }
+  // Departure cleanup
+  let room_state = room_mod.get_state(room_subject)
+  let lead_opt = domain_room.find_lead(room_state)
+  let active = domain_room.active_participants(room_state)
+  let active_ids = list.map(active, fn(p) { p.id })
+  // Notify inbox of departure (only if lead exists)
+  case lead_opt {
+    Some(lead) -> {
+      let departure_result =
+        inbox_mod.participant_departed(
+          inbox,
+          id.RoomId(room_id),
+          pid,
+          lead.id,
+          active_ids,
+        )
+      // Only send escalation if waits were actually affected
+      case departure_result.escalated_waiter_ids {
+        [] -> Nil
+        _escalated -> {
+          let escalation_body =
+            json.to_string(
+              json.object([
+                #("departed_participant_id", json.string(pid_str)),
+                #("event", json.string("participant_departed")),
+              ]),
+            )
+          let escalation_result =
+            room_mod.send_msg_full(
+              room_subject,
+              lead.id,
+              [lead.id],
+              message.Escalation,
+              "Agent "
+                <> pid_str
+                <> " departed. Pending waits escalated to lead.",
+              Some(escalation_body),
+              None,
+            )
+          case escalation_result {
+            Ok(esc_msg) -> inbox_mod.notify_message(inbox, esc_msg)
+            Error(_) -> Nil
+          }
+        }
+      }
+    }
+    None -> Nil
+  }
+  // Unregister from presence
+  presence_mod.unregister(presence, pid, room_id)
+  Ok(
+    json.object([
+      #("room_id", json.string(room_id)),
+      #("participant_id", json.string(pid_str)),
+      #("status", json.string("departed")),
+      #("drain_completed", json.bool(drain_completed)),
     ]),
   )
 }
@@ -433,7 +554,14 @@ fn handle_wait_for(
     Error(_) -> {
       // No immediate match — register wait with inbox (non-blocking for inbox)
       let wait_result =
-        inbox_mod.register_wait(inbox, pid, filter, since_seq, timeout_ms)
+        inbox_mod.register_wait(
+          inbox,
+          pid,
+          filter,
+          since_seq,
+          timeout_ms,
+          Some(id.RoomId(room_id)),
+        )
       case wait_result {
         Ok(msg) -> Ok(nudge(msg))
         Error(e) -> Error(e)

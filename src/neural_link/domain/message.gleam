@@ -22,6 +22,7 @@ pub type MessageKind {
   Summary
   Challenge
   Proposal
+  Escalation
 }
 
 pub type PersistHint {
@@ -93,14 +94,21 @@ pub fn kind_to_string(kind: MessageKind) -> String {
     Summary -> "summary"
     Challenge -> "challenge"
     Proposal -> "proposal"
+    Escalation -> "escalation"
   }
 }
 
 /// True for message kinds that carry durable collective memory.
 pub fn is_durable(kind: MessageKind) -> Bool {
   case kind {
-    Decision | Blocker | Handoff | ReviewResult | Summary | Challenge | Proposal ->
-      True
+    Decision
+    | Blocker
+    | Handoff
+    | ReviewResult
+    | Summary
+    | Challenge
+    | Proposal
+    | Escalation -> True
     _ -> False
   }
 }

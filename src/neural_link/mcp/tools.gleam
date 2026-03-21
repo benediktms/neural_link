@@ -4,6 +4,7 @@ pub fn all_tools() -> List(protocol.ToolDefinition) {
   [
     room_open(),
     room_join(),
+    room_leave(),
     message_send(),
     inbox_read(),
     message_ack(),
@@ -16,12 +17,24 @@ pub fn all_tools() -> List(protocol.ToolDefinition) {
 fn room_open() -> protocol.ToolDefinition {
   ToolDefinition(
     name: "room_open",
-    description: "Create a new coordination room",
+    description: "Create a new coordination room. The opener is auto-joined as the room's lead.",
     properties: [
       ToolProperty(
         name: "title",
         prop_type: "string",
         description: "Room title",
+        required: True,
+      ),
+      ToolProperty(
+        name: "participant_id",
+        prop_type: "string",
+        description: "Lead participant identifier (auto-joined as lead)",
+        required: True,
+      ),
+      ToolProperty(
+        name: "display_name",
+        prop_type: "string",
+        description: "Display name for the lead participant",
         required: True,
       ),
       ToolProperty(
@@ -97,6 +110,33 @@ fn room_join() -> protocol.ToolDefinition {
   )
 }
 
+fn room_leave() -> protocol.ToolDefinition {
+  ToolDefinition(
+    name: "room_leave",
+    description: "Leave a room with drain semantics. Blocks until outbound obligations clear or timeout. Lead cannot leave (use room_close).",
+    properties: [
+      ToolProperty(
+        name: "room_id",
+        prop_type: "string",
+        description: "Room ID to leave",
+        required: True,
+      ),
+      ToolProperty(
+        name: "participant_id",
+        prop_type: "string",
+        description: "Participant identifier",
+        required: True,
+      ),
+      ToolProperty(
+        name: "timeout_ms",
+        prop_type: "string",
+        description: "Drain timeout in milliseconds (default: 30000, max: 120000)",
+        required: False,
+      ),
+    ],
+  )
+}
+
 fn message_send() -> protocol.ToolDefinition {
   ToolDefinition(
     name: "message_send",
@@ -117,7 +157,7 @@ fn message_send() -> protocol.ToolDefinition {
       ToolProperty(
         name: "kind",
         prop_type: "string",
-        description: "Message kind: question, answer, finding, handoff, blocker, decision, review_request, review_result, artifact_ref, summary, challenge, proposal",
+        description: "Message kind: question, answer, finding, handoff, blocker, decision, review_request, review_result, artifact_ref, summary, challenge, proposal, escalation",
         required: True,
       ),
       ToolProperty(

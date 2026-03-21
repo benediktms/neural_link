@@ -14,6 +14,15 @@ import neural_link/domain/participant.{type Participant}
 import neural_link/domain/room.{type Room, type RoomResolution}
 
 // ---------------------------------------------------------------------------
+// Leave result type
+// ---------------------------------------------------------------------------
+
+pub type LeaveResult {
+  Departed
+  DrainStarted(pending_message_ids: List(String))
+}
+
+// ---------------------------------------------------------------------------
 // Internal state types
 // ---------------------------------------------------------------------------
 
@@ -27,6 +36,8 @@ type RoomState {
     message_count: Int,
     /// Incremental pending count per participant — O(1) inbox count lookups
     pending_counts: Dict(String, Int),
+    /// Drain callbacks: participant_id_str -> Subject(Nil) to fire on drain completion
+    drain_callbacks: Dict(String, Subject(Nil)),
   )
 }
 
@@ -63,6 +74,15 @@ pub type RoomMessage {
   CountInbox(participant_id: ParticipantId, reply: Subject(Int))
 
   // Lifecycle
+  Leave(
+    participant_id: ParticipantId,
+    drain_reply: Subject(Nil),
+    reply: Subject(Result(LeaveResult, String)),
+  )
+  ForceDeparture(
+    participant_id: ParticipantId,
+    reply: Subject(Result(Nil, String)),
+  )
   CloseRoom(resolution: RoomResolution, reply: Subject(Result(Nil, String)))
   GetState(reply: Subject(Room))
   Shutdown
@@ -82,6 +102,7 @@ pub fn start(room_data: Room) -> actor.StartResult(Subject(RoomMessage)) {
       max_messages: 1000,
       message_count: 0,
       pending_counts: dict.new(),
+      drain_callbacks: dict.new(),
     )
   actor.new(state)
   |> actor.on_message(handle_message)
@@ -151,18 +172,31 @@ fn handle_message(
             )
 
           // Determine audience participant IDs
+          // Broadcast: only Active participants (exclude sender, Draining, Departed)
+          // Directed: exclude Departed participants from receipt creation
           let audience = case to {
             [] ->
               list.filter_map(state.room.participants, fn(p) {
-                case
+                let is_sender =
                   participant_id_to_string(p.id)
                   == participant_id_to_string(from)
-                {
+                case is_sender || !participant.is_active(p) {
                   True -> Error(Nil)
                   False -> Ok(p.id)
                 }
               })
-            ids -> ids
+            ids ->
+              list.filter(ids, fn(pid) {
+                let pid_str = participant_id_to_string(pid)
+                case
+                  list.find(state.room.participants, fn(p) {
+                    participant_id_to_string(p.id) == pid_str
+                  })
+                {
+                  Ok(p) -> !participant.is_departed(p)
+                  Error(_) -> False
+                }
+              })
           }
 
           // Create receipts for audience
@@ -271,12 +305,40 @@ fn handle_message(
           dict.insert(state.pending_counts, pid_str, new_val)
         }
       }
+      // Check drain completion for any draining participants
+      let #(completed_drains, remaining_callbacks) =
+        dict.fold(
+          state.drain_callbacks,
+          #([], dict.new()),
+          fn(acc, drain_pid_str, callback) {
+            let #(completed, remaining) = acc
+            let obligations =
+              check_outbound_obligations_with_receipts(
+                updated_receipts,
+                state.messages,
+                drain_pid_str,
+              )
+            case obligations {
+              [] -> #([#(drain_pid_str, callback), ..completed], remaining)
+              _ -> #(completed, dict.insert(remaining, drain_pid_str, callback))
+            }
+          },
+        )
+      // Fire callbacks and depart completed participants
+      let updated_room =
+        list.fold(completed_drains, state.room, fn(rm, entry) {
+          let #(drain_pid_str, callback) = entry
+          actor.send(callback, Nil)
+          room.depart_participant(rm, id.ParticipantId(drain_pid_str))
+        })
       actor.send(reply, Ok(Nil))
       actor.continue(
         RoomState(
           ..state,
+          room: updated_room,
           receipts: updated_receipts,
           pending_counts: updated_pending,
+          drain_callbacks: remaining_callbacks,
         ),
       )
     }
@@ -309,6 +371,90 @@ fn handle_message(
     }
 
     // -----------------------------------------------------------------------
+    Leave(participant_id, drain_reply, reply) -> {
+      let pid_str = participant_id_to_string(participant_id)
+      case room.is_closed(state.room) {
+        True -> {
+          actor.send(reply, Error("Room is closed"))
+          actor.continue(state)
+        }
+        False -> {
+          // Check if already departed (idempotent)
+          let already_departed =
+            list.any(state.room.participants, fn(p) {
+              participant_id_to_string(p.id) == pid_str
+              && participant.is_departed(p)
+            })
+          case already_departed {
+            True -> {
+              actor.send(drain_reply, Nil)
+              actor.send(reply, Ok(Departed))
+              actor.continue(state)
+            }
+            False -> {
+              // Reject if participant is the Lead
+              case room.is_lead(state.room, participant_id) {
+                True -> {
+                  actor.send(reply, Error("Lead cannot leave; use room_close"))
+                  actor.continue(state)
+                }
+                False -> {
+                  let obligations = check_outbound_obligations(state, pid_str)
+                  case obligations {
+                    [] -> {
+                      let updated_room =
+                        room.depart_participant(state.room, participant_id)
+                      actor.send(drain_reply, Nil)
+                      actor.send(reply, Ok(Departed))
+                      actor.continue(RoomState(..state, room: updated_room))
+                    }
+                    pending_ids -> {
+                      let updated_room =
+                        room.set_participant_draining(
+                          state.room,
+                          participant_id,
+                        )
+                      let updated_callbacks =
+                        dict.insert(state.drain_callbacks, pid_str, drain_reply)
+                      actor.send(reply, Ok(DrainStarted(pending_ids)))
+                      actor.continue(
+                        RoomState(
+                          ..state,
+                          room: updated_room,
+                          drain_callbacks: updated_callbacks,
+                        ),
+                      )
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    ForceDeparture(participant_id, reply) -> {
+      let pid_str = participant_id_to_string(participant_id)
+      let updated_room = room.depart_participant(state.room, participant_id)
+      // Fire and remove any stored drain callback
+      case dict.get(state.drain_callbacks, pid_str) {
+        Ok(callback) -> actor.send(callback, Nil)
+        Error(_) -> Nil
+      }
+      let updated_callbacks = dict.delete(state.drain_callbacks, pid_str)
+      actor.send(reply, Ok(Nil))
+      actor.continue(
+        RoomState(
+          ..state,
+          room: updated_room,
+          drain_callbacks: updated_callbacks,
+        ),
+      )
+    }
+
+    // -----------------------------------------------------------------------
     CloseRoom(resolution, reply) -> {
       case room.is_closed(state.room) {
         True -> {
@@ -332,6 +478,46 @@ fn handle_message(
     // -----------------------------------------------------------------------
     Shutdown -> actor.stop()
   }
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Check outbound obligations: messages sent by this participant that have
+/// any pending (unacked) receipts from other participants.
+fn check_outbound_obligations(state: RoomState, pid_str: String) -> List(String) {
+  check_outbound_obligations_with_receipts(
+    state.receipts,
+    state.messages,
+    pid_str,
+  )
+}
+
+fn check_outbound_obligations_with_receipts(
+  receipts: Dict(String, List(Receipt)),
+  messages: List(Message),
+  pid_str: String,
+) -> List(String) {
+  list.filter_map(messages, fn(msg) {
+    case participant_id_to_string(msg.from) == pid_str {
+      False -> Error(Nil)
+      True -> {
+        let msg_key = message_id_to_string(msg.message_id)
+        case dict.get(receipts, msg_key) {
+          Error(_) -> Error(Nil)
+          Ok(receipt_list) -> {
+            let has_pending =
+              list.any(receipt_list, fn(r) { r.status == message.Pending })
+            case has_pending {
+              True -> Ok(msg_key)
+              False -> Error(Nil)
+            }
+          }
+        }
+      }
+    }
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -411,4 +597,19 @@ pub fn get_messages(
 
 pub fn get_state(room: Subject(RoomMessage)) -> Room {
   actor.call(room, 5000, fn(reply) { GetState(reply) })
+}
+
+pub fn leave(
+  room: Subject(RoomMessage),
+  participant_id: ParticipantId,
+  drain_reply: Subject(Nil),
+) -> Result(LeaveResult, String) {
+  actor.call(room, 5000, fn(reply) { Leave(participant_id, drain_reply, reply) })
+}
+
+pub fn force_departure(
+  room: Subject(RoomMessage),
+  participant_id: ParticipantId,
+) -> Result(Nil, String) {
+  actor.call(room, 5000, fn(reply) { ForceDeparture(participant_id, reply) })
 }
