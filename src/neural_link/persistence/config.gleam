@@ -1,50 +1,64 @@
+import gleam/list
+
 // ---------------------------------------------------------------------------
-// Persistence backend
+// Plugin configuration
 // ---------------------------------------------------------------------------
 
-/// A concrete persistence backend.
+/// Configuration for a replication plugin.
 ///
-/// Each variant corresponds to a supported adapter implementation.
-/// Variants marked "(stub)" have no working implementation — they exist
-/// to prove the interface is backend-agnostic.
-pub type PersistenceBackend {
-  /// No persistence backend is configured.
-  /// Operations return `Ok("disabled")` without contacting any backend.
-  Disabled
+/// Each variant corresponds to a supported plugin implementation.
+/// Variants marked "(placeholder)" have no working implementation yet.
+pub type PersistencePluginConfig {
+  /// Brain CLI replication plugin.
+  /// Replicates room events to brain for memory graph indexing.
+  BrainPlugin(brain_name: String)
 
-  /// Brain CLI backend.
-  /// The adapter calls `brain artifacts create` and `brain snapshots save`.
-  Brain(brain_name: String)
-
-  /// HTTP backend (stub — not implemented).
-  /// The adapter calls a generic REST endpoint.
-  Http(url: String, auth_token: String)
+  /// Sqlite replication plugin (placeholder — not implemented).
+  /// For systems that need to consume neural_link events via SQLite replication.
+  SqlitePlugin
 }
 
 // ---------------------------------------------------------------------------
-// Persistence config
+// Plugin registry
 // ---------------------------------------------------------------------------
 
-/// Configuration for a persistence adapter.
+/// A registry of replication plugins configured for a room.
 ///
-/// Carries the backend variant and any credentials/endpoints needed to
-/// contact the backend. The config is passed at each call site — no
-/// global state is maintained by the adapter interface.
-pub type PersistenceConfig {
-  PersistenceConfig(backend: PersistenceBackend)
+/// Plugins are applied in order after the primary SqliteStore write succeeds.
+/// Each plugin receives every event. Plugin errors are logged but do not
+/// block or roll back the primary write.
+pub type PluginRegistry {
+  PluginRegistry(plugins: List(PersistencePluginConfig))
 }
 
-/// Build a Disabled persistence config.
-pub fn disabled() -> PersistenceConfig {
-  PersistenceConfig(backend: Disabled)
+/// An empty plugin registry — no replication consumers.
+pub fn empty() -> PluginRegistry {
+  PluginRegistry(plugins: [])
 }
 
-/// Build a Brain-backed persistence config from a brain name.
-pub fn brain(name: String) -> PersistenceConfig {
-  PersistenceConfig(backend: Brain(brain_name: name))
+/// Add a plugin to a registry.
+pub fn add_plugin(
+  registry: PluginRegistry,
+  config: PersistencePluginConfig,
+) -> PluginRegistry {
+  PluginRegistry(plugins: list.append(registry.plugins, [config]))
 }
 
-/// Build an Http-backed persistence config.
-pub fn http(url: String, auth_token: String) -> PersistenceConfig {
-  PersistenceConfig(backend: Http(url: url, auth_token: auth_token))
+/// Get all plugins in the registry.
+pub fn plugins(registry: PluginRegistry) -> List(PersistencePluginConfig) {
+  registry.plugins
+}
+
+// ---------------------------------------------------------------------------
+// Helper constructors
+// ---------------------------------------------------------------------------
+
+/// Build a BrainPlugin config from a brain name.
+pub fn brain_plugin(name: String) -> PersistencePluginConfig {
+  BrainPlugin(brain_name: name)
+}
+
+/// Build a SqlitePlugin config (placeholder).
+pub fn sqlite_plugin() -> PersistencePluginConfig {
+  SqlitePlugin
 }

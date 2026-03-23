@@ -1,22 +1,32 @@
-import neural_link/persistence/adapter
+import neural_link/persistence/plugin
 import neural_link/persistence/types
 
 // ---------------------------------------------------------------------------
-// HttpAdapter (stub)
+// SqlitePlugin (stub)
 // ---------------------------------------------------------------------------
 
-/// A persistence adapter stub that always returns `Unavailable`.
+/// A replication plugin stub that always returns `Unavailable`.
 ///
-/// This adapter proves the `PersistenceAdapter` interface is genuinely
-/// backend-agnostic — a second adapter can exist without any brain dependency.
-/// When the HTTP adapter is implemented, replace this stub with a real one.
-pub fn http_adapter() -> adapter.PersistenceAdapter {
-  adapter.PersistenceAdapter(
-    save_snapshot: fn(_, _, _, _) {
-      Error(types.Unavailable(detail: "http adapter not implemented"))
+/// This proves the `PersistencePlugin` interface is genuinely backend-agnostic —
+/// a second plugin can exist alongside BrainPlugin without any brain dependency.
+///
+/// When the SqlitePlugin is implemented, it would replicate neural_link events
+/// to a secondary SQLite database for consumers that need a raw event feed.
+pub fn sqlite_plugin() -> plugin.PersistencePlugin {
+  plugin.PersistencePlugin(
+    name: "sqlite",
+    on_init: fn() { Ok(Nil) },
+    on_room_open: fn(_) {
+      Error(types.Unavailable(detail: "sqlite plugin not implemented"))
     },
-    create_artifact: fn(_, _, _, _, _) {
-      Error(types.Unavailable(detail: "http adapter not implemented"))
+    on_room_close: fn(_, _, _) {
+      Error(types.Unavailable(detail: "sqlite plugin not implemented"))
+    },
+    on_conversation_artifact: fn(_, _) {
+      Error(types.Unavailable(detail: "sqlite plugin not implemented"))
+    },
+    on_message: fn(_) {
+      Error(types.Unavailable(detail: "sqlite plugin not implemented"))
     },
   )
 }
