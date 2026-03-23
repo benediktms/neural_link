@@ -9,8 +9,6 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import logging
-import neural_link/brain/bridge
-import neural_link/brain/types.{type BrainConfig, BrainConfig}
 import neural_link/domain/id.{
   MessageId, ParticipantId, ThreadId, message_id_to_string,
   participant_id_to_string,
@@ -22,7 +20,10 @@ import neural_link/domain/room as domain_room
 import neural_link/domain/summary as extraction
 import neural_link/domain/wait
 import neural_link/mcp/transport
+import neural_link/persistence/brain as brain_persistence
 import neural_link/persistence/config.{type PersistencePluginConfig}
+import neural_link/persistence/plugin as persistence_plugin
+import neural_link/persistence/types as persistence_types
 import neural_link/runtime/inbox as inbox_mod
 import neural_link/runtime/presence as presence_mod
 import neural_link/runtime/registry as registry_mod
@@ -205,8 +206,10 @@ fn handle_room_open(
     plugins,
     mode,
   ))
-  // Fire-and-forget brain bridge per declared plugin
-  fire_brain_bridge(room.plugins, fn(cfg) { bridge.on_room_open(cfg, room) })
+  // Fire-and-forget plugin notification per declared plugin
+  notify_plugins(room.plugins, fn(p) {
+    persistence_plugin.notify_room_open(p, room)
+  })
   let id.RoomId(room_id_str) = room.id
   // Auto-join opener as Lead
   let lead =
@@ -420,9 +423,11 @@ fn handle_message_send(
   ))
   // Notify inbox of new message
   inbox_mod.notify_message(inbox, msg)
-  // Fire-and-forget brain bridge using per-room plugins
+  // Fire-and-forget plugin notification using per-room plugins
   let room_state = room_mod.get_state(room_subject)
-  fire_brain_bridge(room_state.plugins, fn(cfg) { bridge.on_message(cfg, msg) })
+  notify_plugins(room_state.plugins, fn(p) {
+    persistence_plugin.notify_message(p, msg)
+  })
   let mid = message_id_to_string(msg.message_id)
   let id.RoomId(rid) = msg.room_id
   Ok(
@@ -625,8 +630,13 @@ fn handle_room_close(
   let duration_ms =
     birl.to_unix_milli(birl.utc_now())
     - birl.to_unix_milli(room_state.created_at)
-  fire_brain_bridge(room_state.plugins, fn(cfg) {
-    bridge.on_room_close(cfg, closed_room, message_count, duration_ms)
+  notify_plugins(room_state.plugins, fn(p) {
+    persistence_plugin.notify_room_close(
+      p,
+      closed_room,
+      message_count,
+      duration_ms,
+    )
   })
   // Compute compliance if interaction mode is set
   let compliance_fields = case room_state.interaction_mode {
@@ -673,28 +683,27 @@ fn persist_conversation_artifact(
   room: domain_room.Room,
   conv: extraction.ConversationExtraction,
 ) -> extraction.ConversationExtraction {
-  // Try each brain plugin synchronously until one succeeds
-  case plugins {
-    [] -> conv
-    [plugin, ..rest] -> {
-      case plugin {
-        config.BrainPlugin(brain_name: brain_name) -> {
-          let cfg = types.BrainConfig(brain_name: brain_name)
-          case bridge.on_room_close_with_artifact(cfg, room, conv.content) {
-            Ok(record_id) -> extraction.set_artifact_id(conv, record_id)
-            Error(err) -> {
-              logging.log(
-                logging.Warning,
-                "brain artifact failed: " <> brain_error_to_string(err),
-              )
-              persist_conversation_artifact(rest, room, conv)
-            }
-          }
+  // Notify each plugin synchronously — errors are logged but do not block
+  list.each(plugins, fn(plugin_cfg) {
+    case plugin_cfg {
+      config.BrainPlugin(brain_name: brain_name) -> {
+        let p = brain_persistence.brain_plugin(brain_name)
+        case
+          persistence_plugin.notify_conversation_artifact(p, room, conv.content)
+        {
+          Ok(Nil) -> Nil
+          Error(err) ->
+            logging.log(
+              logging.Warning,
+              "plugin artifact failed: "
+                <> persistence_types.error_to_string(err),
+            )
         }
-        _ -> persist_conversation_artifact(rest, room, conv)
       }
+      _ -> Nil
     }
-  }
+  })
+  conv
 }
 
 fn extraction_fields(
@@ -715,24 +724,29 @@ fn extraction_fields(
 }
 
 // ---------------------------------------------------------------------------
-// Brain bridge helpers
+// Plugin notification helpers
 // ---------------------------------------------------------------------------
 
-fn fire_brain_bridge(
+/// Fire-and-forget plugin notification. Builds a PersistencePlugin for each
+/// BrainPlugin config, spawns a process to call the action, and logs errors.
+/// SqlitePlugin configs are ignored (stub, not yet implemented).
+fn notify_plugins(
   plugins: List(PersistencePluginConfig),
-  action: fn(BrainConfig) -> types.BrainResult(String),
+  action: fn(persistence_plugin.PersistencePlugin) ->
+    Result(Nil, persistence_types.PersistenceError),
 ) -> Nil {
-  list.each(plugins, fn(plugin) {
-    case plugin {
+  list.each(plugins, fn(plugin_cfg) {
+    case plugin_cfg {
       config.BrainPlugin(brain_name: brain_name) -> {
-        let cfg = BrainConfig(brain_name: brain_name)
+        let p = brain_persistence.brain_plugin(brain_name)
         process.spawn(fn() {
-          case action(cfg) {
-            Ok(_) -> Nil
+          case action(p) {
+            Ok(Nil) -> Nil
             Error(err) ->
               logging.log(
                 logging.Warning,
-                "brain bridge failed: " <> brain_error_to_string(err),
+                "plugin notification failed: "
+                  <> persistence_types.error_to_string(err),
               )
           }
         })
@@ -741,12 +755,4 @@ fn fire_brain_bridge(
       _ -> Nil
     }
   })
-}
-
-fn brain_error_to_string(err: types.BrainError) -> String {
-  case err {
-    types.Timeout -> "timeout"
-    types.CommandFailed(s) -> "command failed: " <> s
-    types.ParseError(s) -> "parse error: " <> s
-  }
 }
