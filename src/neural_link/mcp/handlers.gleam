@@ -22,6 +22,7 @@ import neural_link/domain/room as domain_room
 import neural_link/domain/summary as extraction
 import neural_link/domain/wait
 import neural_link/mcp/transport
+import neural_link/persistence/config.{type PersistencePluginConfig}
 import neural_link/runtime/inbox as inbox_mod
 import neural_link/runtime/presence as presence_mod
 import neural_link/runtime/registry as registry_mod
@@ -182,10 +183,11 @@ fn handle_room_open(
     get_optional_string_param(params, "tags")
     |> option.map(split_comma)
     |> option.unwrap([])
-  let brains =
+  let plugins =
     get_optional_string_param(params, "brains")
     |> option.map(split_comma)
     |> option.unwrap([])
+    |> list.map(config.brain_plugin)
   let mode =
     get_optional_string_param(params, "interaction_mode")
     |> option.then(fn(s) {
@@ -200,11 +202,11 @@ fn handle_room_open(
     purpose,
     external_ref,
     tags,
-    brains,
+    plugins,
     mode,
   ))
-  // Fire-and-forget brain bridge per declared brain
-  fire_brain_bridge(room.brains, fn(cfg) { bridge.on_room_open(cfg, room) })
+  // Fire-and-forget brain bridge per declared plugin
+  fire_brain_bridge(room.plugins, fn(cfg) { bridge.on_room_open(cfg, room) })
   let id.RoomId(room_id_str) = room.id
   // Auto-join opener as Lead
   let lead =
@@ -418,9 +420,9 @@ fn handle_message_send(
   ))
   // Notify inbox of new message
   inbox_mod.notify_message(inbox, msg)
-  // Fire-and-forget brain bridge using per-room brains
+  // Fire-and-forget brain bridge using per-room plugins
   let room_state = room_mod.get_state(room_subject)
-  fire_brain_bridge(room_state.brains, fn(cfg) { bridge.on_message(cfg, msg) })
+  fire_brain_bridge(room_state.plugins, fn(cfg) { bridge.on_message(cfg, msg) })
   let mid = message_id_to_string(msg.message_id)
   let id.RoomId(rid) = msg.room_id
   Ok(
@@ -616,13 +618,14 @@ fn handle_room_close(
   // Extract structured conversation data
   let conv = extraction.extract(closed_room, None, messages)
   // Persist conversation artifact synchronously (need the record ID)
-  let conv = persist_conversation_artifact(room_state.brains, closed_room, conv)
+  let conv =
+    persist_conversation_artifact(room_state.plugins, closed_room, conv)
   // Fire-and-forget metadata record (lightweight index)
   let message_count = list.length(messages)
   let duration_ms =
     birl.to_unix_milli(birl.utc_now())
     - birl.to_unix_milli(room_state.created_at)
-  fire_brain_bridge(room_state.brains, fn(cfg) {
+  fire_brain_bridge(room_state.plugins, fn(cfg) {
     bridge.on_room_close(cfg, closed_room, message_count, duration_ms)
   })
   // Compute compliance if interaction mode is set
@@ -666,24 +669,29 @@ fn handle_room_close(
 }
 
 fn persist_conversation_artifact(
-  brains: List(String),
+  plugins: List(PersistencePluginConfig),
   room: domain_room.Room,
   conv: extraction.ConversationExtraction,
 ) -> extraction.ConversationExtraction {
-  // Try each brain synchronously until one succeeds
-  case brains {
+  // Try each brain plugin synchronously until one succeeds
+  case plugins {
     [] -> conv
-    [brain_name, ..rest] -> {
-      let cfg = types.BrainConfig(brain_name: brain_name)
-      case bridge.on_room_close_with_artifact(cfg, room, conv.content) {
-        Ok(record_id) -> extraction.set_artifact_id(conv, record_id)
-        Error(err) -> {
-          logging.log(
-            logging.Warning,
-            "brain artifact failed: " <> brain_error_to_string(err),
-          )
-          persist_conversation_artifact(rest, room, conv)
+    [plugin, ..rest] -> {
+      case plugin {
+        config.BrainPlugin(brain_name: brain_name) -> {
+          let cfg = types.BrainConfig(brain_name: brain_name)
+          case bridge.on_room_close_with_artifact(cfg, room, conv.content) {
+            Ok(record_id) -> extraction.set_artifact_id(conv, record_id)
+            Error(err) -> {
+              logging.log(
+                logging.Warning,
+                "brain artifact failed: " <> brain_error_to_string(err),
+              )
+              persist_conversation_artifact(rest, room, conv)
+            }
+          }
         }
+        _ -> persist_conversation_artifact(rest, room, conv)
       }
     }
   }
@@ -711,22 +719,27 @@ fn extraction_fields(
 // ---------------------------------------------------------------------------
 
 fn fire_brain_bridge(
-  brains: List(String),
+  plugins: List(PersistencePluginConfig),
   action: fn(BrainConfig) -> types.BrainResult(String),
 ) -> Nil {
-  list.each(brains, fn(brain_name) {
-    let cfg = BrainConfig(brain_name: brain_name)
-    process.spawn(fn() {
-      case action(cfg) {
-        Ok(_) -> Nil
-        Error(err) ->
-          logging.log(
-            logging.Warning,
-            "brain bridge failed: " <> brain_error_to_string(err),
-          )
+  list.each(plugins, fn(plugin) {
+    case plugin {
+      config.BrainPlugin(brain_name: brain_name) -> {
+        let cfg = BrainConfig(brain_name: brain_name)
+        process.spawn(fn() {
+          case action(cfg) {
+            Ok(_) -> Nil
+            Error(err) ->
+              logging.log(
+                logging.Warning,
+                "brain bridge failed: " <> brain_error_to_string(err),
+              )
+          }
+        })
+        Nil
       }
-    })
-    Nil
+      _ -> Nil
+    }
   })
 }
 
