@@ -5,6 +5,7 @@ import gleam/otp/actor
 import neural_link/domain/id
 import neural_link/domain/interaction_mode.{type InteractionMode}
 import neural_link/domain/room.{type Room} as domain_room
+import neural_link/persistence/config.{type PersistencePluginConfig}
 import neural_link/runtime/room.{
   type RoomMessage, Shutdown as RoomShutdown, start as start_room,
 }
@@ -15,7 +16,7 @@ pub type RegistryMessage {
     purpose: Option(String),
     external_ref: Option(String),
     tags: List(String),
-    brains: List(String),
+    plugins: List(PersistencePluginConfig),
     interaction_mode: Option(InteractionMode),
     reply: Subject(Result(Room, String)),
   )
@@ -44,7 +45,7 @@ fn handle_message(
       purpose,
       external_ref,
       tags,
-      brains,
+      plugins,
       interaction_mode,
       reply,
     ) -> {
@@ -56,7 +57,7 @@ fn handle_message(
           purpose,
           external_ref,
           tags,
-          brains,
+          plugins,
           interaction_mode,
         )
       case start_room(room_data) {
@@ -114,7 +115,7 @@ pub fn create_room(
   purpose: Option(String),
   external_ref: Option(String),
   tags: List(String),
-  brains: List(String),
+  plugins: List(PersistencePluginConfig),
   interaction_mode: Option(InteractionMode),
 ) -> Result(Room, String) {
   actor.call(registry, 5000, fn(reply) {
@@ -123,7 +124,7 @@ pub fn create_room(
       purpose,
       external_ref,
       tags,
-      brains,
+      plugins,
       interaction_mode,
       reply,
     )

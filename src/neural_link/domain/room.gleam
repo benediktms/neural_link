@@ -6,6 +6,7 @@ import neural_link/domain/id.{
 }
 import neural_link/domain/interaction_mode.{type InteractionMode}
 import neural_link/domain/participant.{type Participant}
+import neural_link/persistence/config.{type PersistencePluginConfig}
 
 pub type RoomStatus {
   Open
@@ -32,7 +33,7 @@ pub type Room {
     purpose: Option(String),
     external_ref: Option(String),
     tags: List(String),
-    brains: List(String),
+    plugins: List(PersistencePluginConfig),
     resolution: Option(RoomResolution),
     interaction_mode: Option(InteractionMode),
   )
@@ -49,7 +50,7 @@ pub fn new(id: String, title: String) -> Room {
     purpose: None,
     external_ref: None,
     tags: [],
-    brains: [],
+    plugins: [],
     resolution: None,
     interaction_mode: None,
   )
@@ -61,7 +62,7 @@ pub fn new_with_metadata(
   purpose: Option(String),
   external_ref: Option(String),
   tags: List(String),
-  brains: List(String),
+  plugins: List(PersistencePluginConfig),
   interaction_mode: Option(InteractionMode),
 ) -> Room {
   Room(
@@ -74,7 +75,7 @@ pub fn new_with_metadata(
     purpose: purpose,
     external_ref: external_ref,
     tags: tags,
-    brains: brains,
+    plugins: plugins,
     resolution: None,
     interaction_mode: interaction_mode,
   )
