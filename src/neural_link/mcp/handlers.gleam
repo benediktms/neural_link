@@ -695,6 +695,18 @@ fn persist_conversation_artifact(
   extraction.ConversationExtraction(..conv, artifact_record_id: record_id)
 }
 
+/// Resolve a PersistencePluginConfig to a PersistencePlugin, if the backend is
+/// implemented. Returns None for stub/unimplemented backends.
+fn resolve_plugin_config(
+  cfg: PersistencePluginConfig,
+) -> Option(persistence_plugin.PersistencePlugin) {
+  case cfg {
+    config.BrainPlugin(brain_name: brain_name) ->
+      Some(brain_persistence.brain_plugin(brain_name))
+    _ -> None
+  }
+}
+
 fn find_first_artifact_record_id(
   plugins: List(PersistencePluginConfig),
   room: domain_room.Room,
@@ -703,9 +715,9 @@ fn find_first_artifact_record_id(
   case plugins {
     [] -> option.None
     [plugin_cfg, ..rest] -> {
-      case plugin_cfg {
-        config.BrainPlugin(brain_name: brain_name) -> {
-          let p = brain_persistence.brain_plugin(brain_name)
+      case resolve_plugin_config(plugin_cfg) {
+        None -> find_first_artifact_record_id(rest, room, content)
+        Some(p) -> {
           case
             persistence_plugin.notify_conversation_artifact(p, room, content)
           {
@@ -720,7 +732,6 @@ fn find_first_artifact_record_id(
             }
           }
         }
-        _ -> find_first_artifact_record_id(rest, room, content)
       }
     }
   }
@@ -756,9 +767,9 @@ fn notify_plugins(
     Result(Nil, persistence_types.PersistenceError),
 ) -> Nil {
   list.each(plugins, fn(plugin_cfg) {
-    case plugin_cfg {
-      config.BrainPlugin(brain_name: brain_name) -> {
-        let p = brain_persistence.brain_plugin(brain_name)
+    case resolve_plugin_config(plugin_cfg) {
+      None -> Nil
+      Some(p) -> {
         process.spawn(fn() {
           case action(p) {
             Ok(Nil) -> Nil
@@ -772,7 +783,6 @@ fn notify_plugins(
         })
         Nil
       }
-      _ -> Nil
     }
   })
 }

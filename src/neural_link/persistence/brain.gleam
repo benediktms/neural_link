@@ -1,5 +1,6 @@
 import birl
 import gleam/int
+import gleam/list
 import gleam/option
 import gleam/string
 import neural_link/brain/client
@@ -71,11 +72,12 @@ fn on_conversation_artifact(
   fn(room: Room, content: String) {
     let brain_cfg = brain_types.BrainConfig(brain_name: name)
     let title = "Conversation: " <> room.title
+    let room_id = id.room_id_to_string(room.id)
+    let room_tags = room.tags
+    let base_tags = ["neural-link", "conversation", room_id]
+    let tags = list.append(base_tags, room_tags)
     case
-      client.create_artifact(brain_cfg, title, content, "conversation", [
-        "neural-link",
-        "conversation",
-      ])
+      client.create_artifact(brain_cfg, title, content, "conversation", tags)
     {
       Ok(record_id) -> Ok(record_id)
       Error(err) -> Error(map_brain_error(err))
@@ -100,7 +102,7 @@ fn persist_message(
   let kind_str = kind_to_string(msg.kind)
   let title = "[" <> kind_str <> "] " <> msg.summary
   let content = build_message_text(room_id, kind_str, msg)
-  case is_durable(msg.kind) {
+  case is_durable(msg.kind) || msg.persist_hint == message.Durable {
     False -> Ok(Nil)
     True -> {
       case msg.kind {

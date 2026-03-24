@@ -3,6 +3,7 @@
 
 default_port := "9961"
 bin_dir := env("HOME") / "bin"
+opencode_cfg := env("HOME") / ".config/opencode/opencode.json"
 
 default:
     @just --list
@@ -22,16 +23,43 @@ install: build
     cp {{bin_dir}}/nlk {{bin_dir}}/neural_link
     @echo "Installed: {{bin_dir}}/nlk"
     @echo "Installed: {{bin_dir}}/neural_link"
+    # Claude Code MCP registration (idempotent)
     claude mcp remove neural_link 2>/dev/null || true
     claude mcp add -s user -t http neural_link http://localhost:{{default_port}}/mcp
-    @echo "Registered: neural_link MCP (http://localhost:{{default_port}}/mcp)"
+    @echo "Registered: neural_link MCP in Claude Code (http://localhost:{{default_port}}/mcp)"
+    # OpenCode MCP registration (idempotent — skip if already present)
+    if [ -f "{{opencode_cfg}}" ]; then \
+      if jq -e '.mcp.neural_link == null' "{{opencode_cfg}}" > /dev/null 2>&1; then \
+        jq '.mcp.neural_link = {"type":"http","url":"http://localhost:'"{{default_port}}"'/mcp","enabled":true}' \
+          "{{opencode_cfg}}" > "{{opencode_cfg}}.tmp" && mv "{{opencode_cfg}}.tmp" "{{opencode_cfg}}"; \
+        echo "Registered: neural_link MCP in OpenCode (http://localhost:{{default_port}}/mcp)"; \
+      else \
+        echo "Skipped: neural_link MCP already registered in OpenCode"; \
+      fi; \
+    else \
+      echo "Skipped: OpenCode config not found at {{opencode_cfg}}"; \
+    fi
     nlk start
 
 [group('setup')]
 uninstall:
+    # Claude Code MCP deregistration
     claude mcp remove neural_link 2>/dev/null || true
+    @echo "Removed: neural_link MCP from Claude Code"
+    # OpenCode MCP deregistration (idempotent — skip if not present)
+    if [ -f "{{opencode_cfg}}" ]; then \
+      if jq -e '.mcp.neural_link != null' "{{opencode_cfg}}" > /dev/null 2>&1; then \
+        jq 'delpaths([["mcp", "neural_link"]])' \
+          "{{opencode_cfg}}" > "{{opencode_cfg}}.tmp" && mv "{{opencode_cfg}}.tmp" "{{opencode_cfg}}"; \
+        echo "Removed: neural_link MCP from OpenCode"; \
+      else \
+        echo "Skipped: neural_link MCP not present in OpenCode"; \
+      fi; \
+    else \
+      echo "Skipped: OpenCode config not found"; \
+    fi
     rm -f {{bin_dir}}/nlk {{bin_dir}}/neural_link
-    @echo "Removed nlk and neural_link from {{bin_dir}}"
+    @echo "Removed: nlk and neural_link from {{bin_dir}}"
 
 # ── Development ────────────────────────────────
 
