@@ -1,5 +1,3 @@
-import gleam/list
-
 // ---------------------------------------------------------------------------
 // Plugin configuration
 // ---------------------------------------------------------------------------
@@ -16,37 +14,6 @@ pub type PersistencePluginConfig {
   /// Sqlite replication plugin (placeholder — not implemented).
   /// For systems that need to consume neural_link events via SQLite replication.
   SqlitePlugin
-}
-
-// ---------------------------------------------------------------------------
-// Plugin registry
-// ---------------------------------------------------------------------------
-
-/// A registry of replication plugins configured for a room.
-///
-/// Plugins are applied in order after the primary SqliteStore write succeeds.
-/// Each plugin receives every event. Plugin errors are logged but do not
-/// block or roll back the primary write.
-pub type PluginRegistry {
-  PluginRegistry(plugins: List(PersistencePluginConfig))
-}
-
-/// An empty plugin registry — no replication consumers.
-pub fn empty() -> PluginRegistry {
-  PluginRegistry(plugins: [])
-}
-
-/// Add a plugin to a registry.
-pub fn add_plugin(
-  registry: PluginRegistry,
-  config: PersistencePluginConfig,
-) -> PluginRegistry {
-  PluginRegistry(plugins: list.append(registry.plugins, [config]))
-}
-
-/// Get all plugins in the registry.
-pub fn plugins(registry: PluginRegistry) -> List(PersistencePluginConfig) {
-  registry.plugins
 }
 
 // ---------------------------------------------------------------------------
