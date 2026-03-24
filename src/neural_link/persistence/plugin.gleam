@@ -33,7 +33,8 @@ pub type PersistencePlugin {
     on_init: fn() -> Result(Nil, PersistenceError),
     on_room_open: fn(Room) -> Result(Nil, PersistenceError),
     on_room_close: fn(Room, Int, Int) -> Result(Nil, PersistenceError),
-    on_conversation_artifact: fn(Room, String) -> Result(Nil, PersistenceError),
+    on_conversation_artifact: fn(Room, String) ->
+      Result(String, PersistenceError),
     on_message: fn(Message) -> Result(Nil, PersistenceError),
   )
 }
@@ -64,6 +65,9 @@ pub fn notify_room_close(
 /// The artifact is already in SqliteStore. Plugins replicate to external
 /// systems (e.g. BrainPlugin → brain CLI for memory graph indexing).
 ///
+/// Returns the plugin's record ID on success (plugins may generate their own IDs).
+/// The canonical record ID comes from SqliteStore as the primary store.
+///
 /// This is the one SYNC path — it is called synchronously from the room close
 /// handler and blocks until all plugins acknowledge or return error.
 /// Plugin errors are logged but do not block the primary write.
@@ -71,7 +75,7 @@ pub fn notify_conversation_artifact(
   plugin: PersistencePlugin,
   room: Room,
   content: String,
-) -> Result(Nil, PersistenceError) {
+) -> Result(String, PersistenceError) {
   plugin.on_conversation_artifact(room, content)
 }
 

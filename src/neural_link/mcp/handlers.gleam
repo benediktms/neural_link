@@ -683,27 +683,47 @@ fn persist_conversation_artifact(
   room: domain_room.Room,
   conv: extraction.ConversationExtraction,
 ) -> extraction.ConversationExtraction {
-  // Notify each plugin synchronously — errors are logged but do not block
-  list.each(plugins, fn(plugin_cfg) {
-    case plugin_cfg {
-      config.BrainPlugin(brain_name: brain_name) -> {
-        let p = brain_persistence.brain_plugin(brain_name)
-        case
-          persistence_plugin.notify_conversation_artifact(p, room, conv.content)
-        {
-          Ok(Nil) -> Nil
-          Error(err) ->
-            logging.log(
-              logging.Warning,
-              "plugin artifact failed: "
-                <> persistence_types.error_to_string(err),
-            )
-        }
-      }
-      _ -> Nil
+  // Notify each plugin synchronously. Collect the first successful record ID.
+  // The canonical ID comes from SqliteStore; this ID is from the first
+  // replication plugin that succeeds (typically BrainPlugin).
+  let record_id = case conv.artifact_record_id {
+    Some(id) -> Some(id)
+    None -> {
+      find_first_artifact_record_id(plugins, room, conv.content)
     }
-  })
-  conv
+  }
+  extraction.ConversationExtraction(..conv, artifact_record_id: record_id)
+}
+
+fn find_first_artifact_record_id(
+  plugins: List(PersistencePluginConfig),
+  room: domain_room.Room,
+  content: String,
+) -> option.Option(String) {
+  case plugins {
+    [] -> option.None
+    [plugin_cfg, ..rest] -> {
+      case plugin_cfg {
+        config.BrainPlugin(brain_name: brain_name) -> {
+          let p = brain_persistence.brain_plugin(brain_name)
+          case
+            persistence_plugin.notify_conversation_artifact(p, room, content)
+          {
+            Ok(record_id) -> option.Some(record_id)
+            Error(err) -> {
+              logging.log(
+                logging.Warning,
+                "plugin artifact failed: "
+                  <> persistence_types.error_to_string(err),
+              )
+              find_first_artifact_record_id(rest, room, content)
+            }
+          }
+        }
+        _ -> find_first_artifact_record_id(rest, room, content)
+      }
+    }
+  }
 }
 
 fn extraction_fields(

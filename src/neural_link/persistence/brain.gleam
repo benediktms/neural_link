@@ -67,7 +67,7 @@ fn on_room_close(
 
 fn on_conversation_artifact(
   name: String,
-) -> fn(Room, String) -> Result(Nil, types.PersistenceError) {
+) -> fn(Room, String) -> Result(String, types.PersistenceError) {
   fn(room: Room, content: String) {
     let brain_cfg = brain_types.BrainConfig(brain_name: name)
     let title = "Conversation: " <> room.title
@@ -77,7 +77,7 @@ fn on_conversation_artifact(
         "conversation",
       ])
     {
-      Ok(_) -> Ok(Nil)
+      Ok(record_id) -> Ok(record_id)
       Error(err) -> Error(map_brain_error(err))
     }
   }
