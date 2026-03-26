@@ -22,11 +22,11 @@ fn run_foreground() -> Nil {
     Ok(services) -> {
       let tool_defs = tools.all_tools()
       let handler =
-        handlers.make_handler(
-          services.registry,
-          services.inbox,
-          services.presence,
-        )
+        handlers.make_handler(handlers.HandlerConfig(
+          registry: services.registry,
+          inbox: services.inbox,
+          presence: services.presence,
+        ))
       case config.load_transport() {
         config.Http ->
           http_transport.start(

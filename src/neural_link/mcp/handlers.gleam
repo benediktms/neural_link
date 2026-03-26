@@ -30,25 +30,64 @@ import neural_link/runtime/registry as registry_mod
 import neural_link/runtime/room as room_mod
 
 // ---------------------------------------------------------------------------
+// Handler configuration (for testing injection)
+// ---------------------------------------------------------------------------
+
+pub type HandlerConfig {
+  HandlerConfig(
+    registry: Subject(registry_mod.RegistryMessage),
+    inbox: Subject(inbox_mod.InboxMessage),
+    presence: Subject(presence_mod.PresenceMessage),
+  )
+}
+
+fn resolve_plugin_config_real(
+  cfg: PersistencePluginConfig,
+) -> Option(persistence_plugin.PersistencePlugin) {
+  case cfg {
+    config.BrainPlugin(brain_name: brain_name) ->
+      Some(brain_persistence.brain_plugin(brain_name))
+    _ -> None
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
-pub fn make_handler(
-  registry: Subject(registry_mod.RegistryMessage),
-  inbox: Subject(inbox_mod.InboxMessage),
-  presence: Subject(presence_mod.PresenceMessage),
+pub fn make_handler(config: HandlerConfig) -> transport.ToolCallHandler {
+  do_make_handler(config, resolve_plugin_config_real)
+}
+
+pub fn make_handler_for_testing(
+  config: HandlerConfig,
+  plugin_resolver: fn(PersistencePluginConfig) ->
+    Option(persistence_plugin.PersistencePlugin),
 ) -> transport.ToolCallHandler {
+  do_make_handler(config, plugin_resolver)
+}
+
+fn do_make_handler(
+  config: HandlerConfig,
+  resolve_plugin: fn(PersistencePluginConfig) ->
+    Option(persistence_plugin.PersistencePlugin),
+) -> transport.ToolCallHandler {
+  let HandlerConfig(registry: registry, inbox: inbox, presence: presence) =
+    config
   fn(tool_name: String, arguments: Option(Dynamic)) -> Result(json.Json, String) {
     case tool_name {
-      "room_open" -> handle_room_open(registry, presence, arguments)
+      "room_open" ->
+        handle_room_open(registry, presence, arguments, resolve_plugin)
       "room_join" -> handle_room_join(registry, presence, arguments)
       "room_leave" -> handle_room_leave(registry, inbox, presence, arguments)
-      "message_send" -> handle_message_send(registry, inbox, arguments)
+      "message_send" ->
+        handle_message_send(registry, inbox, arguments, resolve_plugin)
       "inbox_read" -> handle_inbox_read(registry, arguments)
       "message_ack" -> handle_message_ack(registry, arguments)
       "wait_for" -> handle_wait_for(registry, inbox, arguments)
       "thread_summarize" -> handle_thread_summarize(registry, arguments)
-      "room_close" -> handle_room_close(registry, presence, arguments)
+      "room_close" ->
+        handle_room_close(registry, presence, arguments, resolve_plugin)
       _ -> Error("Unknown tool: " <> tool_name)
     }
   }
@@ -173,6 +212,8 @@ fn handle_room_open(
   registry: Subject(registry_mod.RegistryMessage),
   presence: Subject(presence_mod.PresenceMessage),
   arguments: Option(Dynamic),
+  resolve_plugin: fn(PersistencePluginConfig) ->
+    Option(persistence_plugin.PersistencePlugin),
 ) -> Result(json.Json, String) {
   use params <- result.try(require_params(arguments))
   use title <- result.try(get_string_param(params, "title"))
@@ -207,7 +248,7 @@ fn handle_room_open(
     mode,
   ))
   // Fire-and-forget plugin notification per declared plugin
-  notify_plugins(room.plugins, fn(p) {
+  notify_plugins(room.plugins, resolve_plugin, fn(p) {
     persistence_plugin.notify_room_open(p, room)
   })
   let id.RoomId(room_id_str) = room.id
@@ -392,6 +433,8 @@ fn handle_message_send(
   registry: Subject(registry_mod.RegistryMessage),
   inbox: Subject(inbox_mod.InboxMessage),
   arguments: Option(Dynamic),
+  resolve_plugin: fn(PersistencePluginConfig) ->
+    Option(persistence_plugin.PersistencePlugin),
 ) -> Result(json.Json, String) {
   use params <- result.try(require_params(arguments))
   use room_id <- result.try(get_string_param(params, "room_id"))
@@ -425,7 +468,7 @@ fn handle_message_send(
   inbox_mod.notify_message(inbox, msg)
   // Fire-and-forget plugin notification using per-room plugins
   let room_state = room_mod.get_state(room_subject)
-  notify_plugins(room_state.plugins, fn(p) {
+  notify_plugins(room_state.plugins, resolve_plugin, fn(p) {
     persistence_plugin.notify_message(p, msg)
   })
   let mid = message_id_to_string(msg.message_id)
@@ -605,6 +648,8 @@ fn handle_room_close(
   registry: Subject(registry_mod.RegistryMessage),
   presence: Subject(presence_mod.PresenceMessage),
   arguments: Option(Dynamic),
+  resolve_plugin: fn(PersistencePluginConfig) ->
+    Option(persistence_plugin.PersistencePlugin),
 ) -> Result(json.Json, String) {
   use params <- result.try(require_params(arguments))
   use room_id <- result.try(get_string_param(params, "room_id"))
@@ -624,13 +669,18 @@ fn handle_room_close(
   let conv = extraction.extract(closed_room, None, messages)
   // Persist conversation artifact synchronously (need the record ID)
   let conv =
-    persist_conversation_artifact(room_state.plugins, closed_room, conv)
+    persist_conversation_artifact(
+      room_state.plugins,
+      closed_room,
+      conv,
+      resolve_plugin,
+    )
   // Fire-and-forget metadata record (lightweight index)
   let message_count = list.length(messages)
   let duration_ms =
     birl.to_unix_milli(birl.utc_now())
     - birl.to_unix_milli(room_state.created_at)
-  notify_plugins(room_state.plugins, fn(p) {
+  notify_plugins(room_state.plugins, resolve_plugin, fn(p) {
     persistence_plugin.notify_room_close(
       p,
       closed_room,
@@ -682,6 +732,8 @@ fn persist_conversation_artifact(
   plugins: List(PersistencePluginConfig),
   room: domain_room.Room,
   conv: extraction.ConversationExtraction,
+  resolve_plugin: fn(PersistencePluginConfig) ->
+    Option(persistence_plugin.PersistencePlugin),
 ) -> extraction.ConversationExtraction {
   // Notify each plugin synchronously. Collect the first successful record ID.
   // The canonical ID comes from SqliteStore; this ID is from the first
@@ -689,34 +741,25 @@ fn persist_conversation_artifact(
   let record_id = case conv.artifact_record_id {
     Some(id) -> Some(id)
     None -> {
-      find_first_artifact_record_id(plugins, room, conv.content)
+      find_first_artifact_record_id(plugins, room, conv.content, resolve_plugin)
     }
   }
   extraction.ConversationExtraction(..conv, artifact_record_id: record_id)
-}
-
-/// Resolve a PersistencePluginConfig to a PersistencePlugin, if the backend is
-/// implemented. Returns None for stub/unimplemented backends.
-fn resolve_plugin_config(
-  cfg: PersistencePluginConfig,
-) -> Option(persistence_plugin.PersistencePlugin) {
-  case cfg {
-    config.BrainPlugin(brain_name: brain_name) ->
-      Some(brain_persistence.brain_plugin(brain_name))
-    _ -> None
-  }
 }
 
 fn find_first_artifact_record_id(
   plugins: List(PersistencePluginConfig),
   room: domain_room.Room,
   content: String,
+  resolve_plugin: fn(PersistencePluginConfig) ->
+    Option(persistence_plugin.PersistencePlugin),
 ) -> option.Option(String) {
   case plugins {
     [] -> option.None
     [plugin_cfg, ..rest] -> {
-      case resolve_plugin_config(plugin_cfg) {
-        None -> find_first_artifact_record_id(rest, room, content)
+      case resolve_plugin(plugin_cfg) {
+        None ->
+          find_first_artifact_record_id(rest, room, content, resolve_plugin)
         Some(p) -> {
           case
             persistence_plugin.notify_conversation_artifact(p, room, content)
@@ -728,7 +771,7 @@ fn find_first_artifact_record_id(
                 "plugin artifact failed: "
                   <> persistence_types.error_to_string(err),
               )
-              find_first_artifact_record_id(rest, room, content)
+              find_first_artifact_record_id(rest, room, content, resolve_plugin)
             }
           }
         }
@@ -763,11 +806,13 @@ fn extraction_fields(
 /// SqlitePlugin configs are ignored (stub, not yet implemented).
 fn notify_plugins(
   plugins: List(PersistencePluginConfig),
+  resolve_plugin: fn(PersistencePluginConfig) ->
+    Option(persistence_plugin.PersistencePlugin),
   action: fn(persistence_plugin.PersistencePlugin) ->
     Result(Nil, persistence_types.PersistenceError),
 ) -> Nil {
   list.each(plugins, fn(plugin_cfg) {
-    case resolve_plugin_config(plugin_cfg) {
+    case resolve_plugin(plugin_cfg) {
       None -> Nil
       Some(p) -> {
         process.spawn(fn() {
