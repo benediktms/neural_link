@@ -42,7 +42,7 @@ type MockState {
 }
 
 pub type MockMessage {
-  AppendCall(call: MockCall, reply_with: process.Subject(Nil))
+  AppendCall(call: MockCall)
   GetCalls(reply_with: process.Subject(List(MockCall)))
   GetError(reply_with: process.Subject(MockErrorInjection))
   InjectError(err: MockErrorInjection, reply_with: process.Subject(Nil))
@@ -54,8 +54,7 @@ fn handle_mock_message(
   msg: MockMessage,
 ) -> actor.Next(MockState, MockMessage) {
   case msg {
-    AppendCall(call, reply) -> {
-      process.send(reply, Nil)
+    AppendCall(call) -> {
       actor.continue(MockState(calls: [call, ..state.calls], error: state.error))
     }
     GetCalls(reply) -> {
@@ -104,7 +103,7 @@ pub fn new_mock_client(subject: process.Subject(MockMessage)) -> BrainClient {
   BrainClient(
     save_snapshot: fn(cfg, title, content, tags) {
       let call = SaveSnapshotCall(cfg, title, content, tags)
-      process.send(subject, AppendCall(call, process.new_subject()))
+      process.send(subject, AppendCall(call))
       case get_error(subject) {
         NoError -> Ok("mock-record-id")
         InjectTimeout -> Error(Timeout)
@@ -114,7 +113,7 @@ pub fn new_mock_client(subject: process.Subject(MockMessage)) -> BrainClient {
     },
     create_artifact: fn(cfg, title, content, kind, tags) {
       let call = CreateArtifactCall(cfg, title, content, kind, tags)
-      process.send(subject, AppendCall(call, process.new_subject()))
+      process.send(subject, AppendCall(call))
       case get_error(subject) {
         NoError -> Ok("mock-record-id")
         InjectTimeout -> Error(Timeout)
