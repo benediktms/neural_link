@@ -15,7 +15,6 @@ pub fn run(args: List(String)) -> Nil {
   }
 
   let content = generate_docs_content()
-  // TODO: replace this hash with something that makes sense
   let hash = content_hash(content)
   let start_marker = "<!-- " <> marker_prefix <> ":start:" <> hash <> " -->"
   let end_marker = "<!-- " <> marker_prefix <> ":end -->"
