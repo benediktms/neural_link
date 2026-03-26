@@ -15,18 +15,11 @@ import neural_link/persistence/types
 pub fn sqlite_plugin() -> plugin.PersistencePlugin {
   plugin.PersistencePlugin(
     name: "sqlite",
-    on_init: fn() { Ok(Nil) },
-    on_room_open: fn(_) {
-      Error(types.Unavailable(detail: "sqlite plugin not implemented"))
-    },
-    on_room_close: fn(_, _, _) {
-      Error(types.Unavailable(detail: "sqlite plugin not implemented"))
-    },
-    on_conversation_artifact: fn(_, _) {
-      Error(types.Unavailable(detail: "sqlite plugin not implemented"))
-    },
-    on_message: fn(_) {
-      Error(types.Unavailable(detail: "sqlite plugin not implemented"))
+    notify: fn(event: plugin.PluginEvent) {
+      case event {
+        plugin.PluginInit -> Ok(Nil)
+        _ -> Error(types.Unavailable(detail: "sqlite plugin not implemented"))
+      }
     },
   )
 }

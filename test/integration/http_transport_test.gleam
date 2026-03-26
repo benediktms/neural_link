@@ -495,7 +495,11 @@ fn start_test_server() -> Int {
   let assert Ok(services) = supervisor.start()
   let tool_defs = tools.all_tools()
   let handler =
-    handlers.make_handler(services.registry, services.inbox, services.presence)
+    handlers.make_handler(handlers.HandlerConfig(
+      registry: services.registry,
+      inbox: services.inbox,
+      presence: services.presence,
+    ))
   let assert Ok(_) =
     http_transport.start_server(
       tool_defs,

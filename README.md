@@ -1,13 +1,13 @@
 # neural_link
 
-`neural_link` is a coordination layer for multi-agent workflows, implemented in Gleam on the BEAM. It provides execution-scoped rooms where agents exchange typed messages, wait on specific responses, and track delivery per recipient instead of per message. Brain integration adds durable persistence for room lifecycle events and selected message kinds, while the MCP surface makes the system available to external tools and agents.
+`neural_link` is a coordination layer for multi-agent workflows, implemented in Gleam on the BEAM. It provides execution-scoped rooms where agents exchange typed messages, wait on specific responses, and track delivery per recipient instead of per message. A generic persistence plugin architecture adds durable persistence for room lifecycle events and selected message kinds, while the MCP surface makes the system available to external tools and agents.
 
 ## What It Does
 
 - Opens coordination rooms for a single work session or execution scope
 - Tracks participants, inbox state, receipts, and wait conditions in real time
 - Supports typed coordination messages such as findings, blockers, decisions, handoffs, and reviews
-- Persists durable consequences to `brain` without turning every message into a permanent record
+- Persists durable consequences via plugins without turning every message into a permanent record
 - Exposes the coordination model through MCP over stdio and HTTP
 
 ## Architecture
@@ -16,13 +16,15 @@
 src/neural_link/
 ├── domain/          # Pure types: Room, Message, Participant, Thread, Wait
 ├── runtime/         # OTP actors: Registry, Room, Inbox, Presence
-├── brain/           # Brain integration: client (FFI), bridge (lifecycle + durable)
+├── persistence/     # Persistence plugin system: generic interface, BrainPlugin, SqlitePlugin stub
+├── brain/           # Brain CLI client (FFI) and types — used by BrainPlugin
 └── mcp/             # MCP server: protocol, codec, transport, tools, handlers
 ```
 
 - `domain`: immutable types for rooms, messages, participants, threads, receipts, and wait filters
 - `runtime`: OTP supervisor and actors for room lifecycle, inbox state, wait registration, and participant presence
-- `brain`: asynchronous persistence bridge for room open/close events and durable messages
+- `persistence`: generic plugin interface and replication dispatch for room events
+- `brain`: Brain CLI client (FFI) and types — used by BrainPlugin
 - `mcp`: tool definitions, handlers, and stdio/HTTP transport layers
 
 ### Runtime responsibilities
@@ -40,14 +42,14 @@ Most tool calls follow the same path:
 MCP transport
   -> tool handler
   -> runtime actor(s)
-  -> optional brain bridge
+  -> optional persistence plugins
   -> MCP response
 ```
 
 In practice:
 
-- `room_open` and `room_close` pass through MCP handlers into the runtime, then trigger asynchronous `brain` lifecycle persistence
-- `message_send` mutates room state first, then notifies inbox waiters, then optionally persists durable messages
+- `room_open` and `room_close` pass through MCP handlers into the runtime, then trigger asynchronous persistence plugin dispatch
+- `message_send` mutates room state first, then notifies inbox waiters, then optionally persists durable messages via plugins
 - `wait_for` registers a filter with `Inbox` and resumes only when a matching message is observed
 - `thread_summarize` reads existing room state; it does not invoke an external summarizer
 
@@ -62,7 +64,9 @@ A message exists once, but every intended recipient gets an independent receipt.
 
 ### Durability
 
-Room open and close events are always persisted when `brain` integration is configured.
+Room open and close events are always persisted when persistence plugins are configured (via the `brains` parameter on `room_open`).
+
+Persistence is handled by a plugin system. The `BrainPlugin` replicates events to `brain` for memory graph indexing. Plugin failures are logged but do not block the primary coordination flow.
 
 The following message kinds are persisted automatically:
 
@@ -74,6 +78,42 @@ The following message kinds are persisted automatically:
 | `review_result` | Yes |
 | `summary` | Yes, as an artifact |
 | all others | Only when `persist_hint: durable` is set |
+
+## Persistence Plugin Architecture
+
+`neural_link` uses a plugin system for replication and durable persistence. While the primary coordination state lives in the runtime actors, room lifecycle events and durable messages are dispatched to registered persistence plugins.
+
+### Dispatch flow
+
+1.  **Registration**: A room declares its persistence plugins via the `brains` parameter on `room_open`.
+2.  **Resolution**: The MCP handler resolves these configuration strings into `PersistencePlugin` instances.
+3.  **Execution**: When a room event occurs (open, close, durable message), the system dispatches the event to all registered plugins.
+
+### Primary vs. Plugin write
+
+Plugins receive events after the primary write succeeds. They are intended for replication to external systems (like `brain`). Plugin failures are logged by the server but do not roll back or block the primary coordination flow.
+
+### Current plugins
+
+- **BrainPlugin**: The working reference implementation. It replicates room events and durable messages to the `brain` CLI for memory graph indexing.
+- **SqlitePlugin**: A stub implementation (not yet implemented). It always returns `Unavailable` and serves as a template for future SQLite-based replication.
+
+## Writing a Persistence Plugin
+
+Adding a new persistence backend involves three steps:
+
+1.  **Implement the interface**: Create a new module in `src/neural_link/persistence/` that returns a `PersistencePlugin` record (defined in `plugin.gleam`). You must implement all five handlers:
+    - `on_init`: Called when the plugin is registered.
+    - `on_room_open`: Called after a room is opened.
+    - `on_room_close`: Called after a room is closed.
+    - `on_conversation_artifact`: Called with the full conversation text on room close.
+    - `on_message`: Called for each durable message.
+2.  **Add configuration**: Add a new variant to the `PersistencePluginConfig` type in `src/neural_link/persistence/config.gleam`.
+3.  **Register the resolver**: Add a case to `resolve_plugin_config_real` in `src/neural_link/mcp/handlers.gleam` to map your config variant to your plugin implementation.
+
+For a complete example, see `src/neural_link/persistence/brain.gleam`. For a minimal stub, see `src/neural_link/persistence/sqlite_plugin.gleam`.
+
+> **Note for testing**: The `make_handler_for_testing` function in `handlers.gleam` allows injecting a custom plugin resolver, which is useful for verifying plugin dispatch in integration tests without external dependencies.
 
 ## MCP Surface
 
@@ -88,7 +128,7 @@ The MCP server exposes the full coordination workflow:
 | `message_ack` | Acknowledge processed messages |
 | `wait_for` | Block until a matching message arrives |
 | `thread_summarize` | Return a structured summary for a room or thread |
-| `room_close` | Close a room and persist the outcome |
+| `room_close` | Close a room and persist the outcome via registered persistence plugins |
 
 Supported message kinds:
 `question`, `answer`, `finding`, `handoff`, `blocker`, `decision`, `review_request`, `review_result`, `artifact_ref`, `summary`, `challenge`, `proposal`, `escalation`
@@ -99,7 +139,7 @@ Supported message kinds:
 
 - [Gleam](https://gleam.run) 1.7 or newer
 - Erlang/OTP 27 or newer
-- [`brain`](https://github.com/benediktms/brain), optional, for durable persistence
+- [`brain`](https://github.com/benediktms/brain), optional, for durable persistence via `BrainPlugin`
 
 ### Build and test
 
@@ -143,7 +183,7 @@ just install
 6. message_ack(room_id, participant_id: "recon-agent", message_ids: ["msg_..."])
 
 7. room_close(room_id, resolution: "completed")
-   -> durable room records plus any durable message artifacts
+   -> durable room records plus any durable message artifacts via registered persistence plugins
 ```
 
 ## Current Limits

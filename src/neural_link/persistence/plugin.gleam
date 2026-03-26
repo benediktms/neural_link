@@ -3,7 +3,28 @@ import neural_link/domain/room.{type Room}
 import neural_link/persistence/types.{type PersistenceError}
 
 // ---------------------------------------------------------------------------
-// Plugin behaviour
+// PluginEvent — tagged union for all plugin lifecycle events
+// ---------------------------------------------------------------------------
+
+/// All events that a PersistencePlugin can receive.
+/// The canonical record ID for ConversationArtifact comes from SqliteStore
+/// as the primary store; plugins receive it via the event and replicate.
+pub type PluginEvent {
+  /// Called when the plugin is registered (startup).
+  PluginInit
+  /// Called after a room is opened. Room metadata is already persisted.
+  RoomOpened(room: Room)
+  /// Called after a room is closed. Room close metadata is already persisted.
+  RoomClosed(room: Room, message_count: Int, duration_ms: Int)
+  /// Called after conversation artifact is persisted to primary store.
+  /// The record_id is canonical (from SqliteStore); plugins replicate only.
+  ConversationArtifact(room: Room, content: String, record_id: String)
+  /// Called for each durable message. Message is already persisted.
+  Message(msg: Message)
+}
+
+// ---------------------------------------------------------------------------
+// PersistencePlugin behaviour
 // ---------------------------------------------------------------------------
 
 /// A replication plugin that observes writes to the SqliteStore primary.
@@ -11,80 +32,23 @@ import neural_link/persistence/types.{type PersistenceError}
 /// Plugins receive events after the primary write succeeds. Failures are logged
 /// by the caller but do not propagate — the primary write is always authoritative.
 ///
-/// ### Events
-/// - `on_init` — called when the plugin is registered (startup)
-/// - `on_room_open` — called after a room is opened
-/// - `on_room_close` — called after a room is closed
-/// - `on_conversation_artifact` — called with the full conversation text on room close
-/// - `on_message` — called for each durable message
-///
-/// ### Migration path for NLR-01KM9AD.2
-/// Extract `brain/bridge.gleam` into a `BrainPlugin`. The bridge functions
-/// (`on_room_open`, `on_room_close`, `on_message`) become plugin event handlers.
-/// `on_conversation_artifact` maps to `bridge.on_room_close_with_artifact`.
-///
-/// ### Primary vs. plugin write
-/// The SqliteStore receives ALL writes synchronously as the primary store.
-/// Plugins receive events asynchronously and replicate to external systems.
-/// A plugin failure does not roll back or block the primary write.
+/// ### Plugin interface
+/// Plugins implement a single `notify` function that receives PluginEvent values.
+/// They pattern-match on the event variant and handle what they care about.
+/// Returning `Ok(Nil)` means "I handled this"; plugins can also return errors
+/// to signal replication failures (logged but not blocking).
 pub type PersistencePlugin {
   PersistencePlugin(
     name: String,
-    on_init: fn() -> Result(Nil, PersistenceError),
-    on_room_open: fn(Room) -> Result(Nil, PersistenceError),
-    on_room_close: fn(Room, Int, Int) -> Result(Nil, PersistenceError),
-    on_conversation_artifact: fn(Room, String) ->
-      Result(String, PersistenceError),
-    on_message: fn(Message) -> Result(Nil, PersistenceError),
+    notify: fn(PluginEvent) -> Result(Nil, PersistenceError),
   )
 }
 
-/// Notification that a room has been opened.
-/// The room metadata snapshot is already persisted to SqliteStore.
-/// Plugins replicate to external systems as needed.
-pub fn notify_room_open(
+/// Dispatch an event to a plugin.
+/// All plugin notifications flow through this single entrypoint.
+pub fn notify(
   plugin: PersistencePlugin,
-  room: Room,
+  event: PluginEvent,
 ) -> Result(Nil, PersistenceError) {
-  plugin.on_room_open(room)
-}
-
-/// Notification that a room has been closed.
-/// The room close metadata is already persisted to SqliteStore.
-/// Plugins replicate to external systems as needed.
-pub fn notify_room_close(
-  plugin: PersistencePlugin,
-  room: Room,
-  message_count: Int,
-  duration_ms: Int,
-) -> Result(Nil, PersistenceError) {
-  plugin.on_room_close(room, message_count, duration_ms)
-}
-
-/// Notification that a conversation artifact has been persisted.
-/// The artifact is already in SqliteStore. Plugins replicate to external
-/// systems (e.g. BrainPlugin → brain CLI for memory graph indexing).
-///
-/// Returns the plugin's record ID on success (plugins may generate their own IDs).
-/// The canonical record ID comes from SqliteStore as the primary store.
-///
-/// This is the one SYNC path — it is called synchronously from the room close
-/// handler and blocks until all plugins acknowledge or return error.
-/// Plugin errors are logged but do not block the primary write.
-pub fn notify_conversation_artifact(
-  plugin: PersistencePlugin,
-  room: Room,
-  content: String,
-) -> Result(String, PersistenceError) {
-  plugin.on_conversation_artifact(room, content)
-}
-
-/// Notification that a durable message has been persisted.
-/// The message is already in SqliteStore. Plugins replicate to external
-/// systems as needed.
-pub fn notify_message(
-  plugin: PersistencePlugin,
-  msg: Message,
-) -> Result(Nil, PersistenceError) {
-  plugin.on_message(msg)
+  plugin.notify(event)
 }
