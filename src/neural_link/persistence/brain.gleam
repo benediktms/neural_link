@@ -12,25 +12,56 @@ import neural_link/persistence/plugin
 import neural_link/persistence/types
 
 // ---------------------------------------------------------------------------
-// BrainPlugin — replication to brain for memory graph indexing
+// BrainClient — injectable interface for brain CLI operations
 // ---------------------------------------------------------------------------
 
-/// Build a PersistencePlugin that replicates room events to brain.
-///
-/// Brain receives events asynchronously after the primary SqliteStore write.
-/// Brain errors are logged but do not block or roll back the primary write.
-pub fn brain_plugin(name: String) -> plugin.PersistencePlugin {
-  plugin.PersistencePlugin(
-    name: "brain:" <> name,
-    on_init: fn() { Ok(Nil) },
-    on_room_open: on_room_open(name),
-    on_room_close: on_room_close(name),
-    on_conversation_artifact: on_conversation_artifact(name),
-    on_message: on_message(name),
+pub type BrainClient {
+  BrainClient(
+    save_snapshot: fn(brain_types.BrainConfig, String, String, List(String)) ->
+      brain_types.BrainResult(String),
+    create_artifact: fn(
+      brain_types.BrainConfig,
+      String,
+      String,
+      String,
+      List(String),
+    ) ->
+      brain_types.BrainResult(String),
   )
 }
 
-fn on_room_open(name: String) -> fn(Room) -> Result(Nil, types.PersistenceError) {
+// ---------------------------------------------------------------------------
+// BrainPlugin — replication to brain for memory graph indexing
+// ---------------------------------------------------------------------------
+
+pub fn brain_plugin(name: String) -> plugin.PersistencePlugin {
+  brain_plugin_with_client(
+    name,
+    BrainClient(
+      save_snapshot: client.save_snapshot,
+      create_artifact: client.create_artifact,
+    ),
+  )
+}
+
+pub fn brain_plugin_with_client(
+  name: String,
+  client: BrainClient,
+) -> plugin.PersistencePlugin {
+  plugin.PersistencePlugin(
+    name: "brain:" <> name,
+    on_init: fn() { Ok(Nil) },
+    on_room_open: on_room_open(name, client),
+    on_room_close: on_room_close(name, client),
+    on_conversation_artifact: on_conversation_artifact(name, client),
+    on_message: on_message(name, client),
+  )
+}
+
+fn on_room_open(
+  name: String,
+  client: BrainClient,
+) -> fn(Room) -> Result(Nil, types.PersistenceError) {
   fn(room: Room) {
     let brain_cfg = brain_types.BrainConfig(brain_name: name)
     let title = "Room opened: " <> room.title
@@ -49,6 +80,7 @@ fn on_room_open(name: String) -> fn(Room) -> Result(Nil, types.PersistenceError)
 
 fn on_room_close(
   name: String,
+  client: BrainClient,
 ) -> fn(Room, Int, Int) -> Result(Nil, types.PersistenceError) {
   fn(room: Room, message_count: Int, duration_ms: Int) {
     let brain_cfg = brain_types.BrainConfig(brain_name: name)
@@ -68,6 +100,7 @@ fn on_room_close(
 
 fn on_conversation_artifact(
   name: String,
+  client: BrainClient,
 ) -> fn(Room, String) -> Result(String, types.PersistenceError) {
   fn(room: Room, content: String) {
     let brain_cfg = brain_types.BrainConfig(brain_name: name)
@@ -87,16 +120,18 @@ fn on_conversation_artifact(
 
 fn on_message(
   name: String,
+  client: BrainClient,
 ) -> fn(Message) -> Result(Nil, types.PersistenceError) {
   fn(msg: Message) {
     let brain_cfg = brain_types.BrainConfig(brain_name: name)
-    persist_message(brain_cfg, msg)
+    persist_message(brain_cfg, msg, client)
   }
 }
 
 fn persist_message(
   brain_cfg: brain_types.BrainConfig,
   msg: Message,
+  client: BrainClient,
 ) -> Result(Nil, types.PersistenceError) {
   let room_id = id.room_id_to_string(msg.room_id)
   let kind_str = kind_to_string(msg.kind)
@@ -148,7 +183,7 @@ fn map_brain_error(err: brain_types.BrainError) -> types.PersistenceError {
 // Content builders (copied from bridge.gleam)
 // ---------------------------------------------------------------------------
 
-fn build_room_open_text(room: Room) -> String {
+pub fn build_room_open_text(room: Room) -> String {
   let room_id = id.room_id_to_string(room.id)
   let purpose = option.unwrap(room.purpose, "none")
   let external_ref = option.unwrap(room.external_ref, "none")
@@ -172,7 +207,7 @@ fn build_room_open_text(room: Room) -> String {
   )
 }
 
-fn build_room_close_text(
+pub fn build_room_close_text(
   room: Room,
   message_count: Int,
   duration_ms: Int,
@@ -206,7 +241,11 @@ fn build_room_close_text(
   )
 }
 
-fn build_message_text(room_id: String, kind_str: String, msg: Message) -> String {
+pub fn build_message_text(
+  room_id: String,
+  kind_str: String,
+  msg: Message,
+) -> String {
   let msg_id = id.message_id_to_string(msg.message_id)
   let from_str = id.participant_id_to_string(msg.from)
   let body_str = option.unwrap(msg.body, "none")
