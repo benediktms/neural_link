@@ -37,11 +37,6 @@ pub type PluginEvent {
 /// They pattern-match on the event variant and handle what they care about.
 /// Returning `Ok(Nil)` means "I handled this"; plugins can also return errors
 /// to signal replication failures (logged but not blocking).
-///
-/// ### Migration path (NLR-01KM9AD.2)
-/// The old 5-handler interface (on_init, on_room_open, on_room_close,
-/// on_conversation_artifact, on_message) is replaced by a single `notify`
-/// function that receives PluginEvent tagged union values.
 pub type PersistencePlugin {
   PersistencePlugin(
     name: String,

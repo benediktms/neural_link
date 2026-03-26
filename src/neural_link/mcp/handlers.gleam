@@ -656,7 +656,7 @@ fn handle_room_close(
   use resolution_str <- result.try(get_string_param(params, "resolution"))
   use resolution <- result.try(parse_resolution(resolution_str))
   use room_subject <- result.try(registry_mod.get_room(registry, room_id))
-  // Get state and messages before close for brain bridge
+  // Get state and messages before close
   let room_state = room_mod.get_state(room_subject)
   let messages = room_mod.get_messages(room_subject, None)
   use _ <- result.try(room_mod.close_room(room_subject, resolution))

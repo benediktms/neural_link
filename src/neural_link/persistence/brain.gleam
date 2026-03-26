@@ -169,7 +169,7 @@ fn map_brain_error(err: brain_types.BrainError) -> types.PersistenceError {
 }
 
 // ---------------------------------------------------------------------------
-// Content builders (copied from bridge.gleam)
+// Content builders
 // ---------------------------------------------------------------------------
 
 pub fn build_room_open_text(room: Room) -> String {
