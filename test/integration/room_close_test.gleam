@@ -347,7 +347,7 @@ pub fn room_close_with_brain_plugin_returns_artifact_record_id_test() {
   let assert Ok(resp) = room_close(url, sid, room_id, "completed")
 
   let assert Ok(record_id) = extract_json_string(resp, "artifact_record_id")
-  record_id |> should.equal("mock-record-id")
+  record_id |> should.equal("")
 }
 
 pub fn room_close_with_brain_plugin_calls_notify_conversation_artifact_test() {

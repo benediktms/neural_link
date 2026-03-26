@@ -50,81 +50,70 @@ pub fn brain_plugin_with_client(
 ) -> plugin.PersistencePlugin {
   plugin.PersistencePlugin(
     name: "brain:" <> name,
-    on_init: fn() { Ok(Nil) },
-    on_room_open: on_room_open(name, client),
-    on_room_close: on_room_close(name, client),
-    on_conversation_artifact: on_conversation_artifact(name, client),
-    on_message: on_message(name, client),
+    notify: notify_impl(name, client),
   )
 }
 
-fn on_room_open(
+fn notify_impl(
   name: String,
   client: BrainClient,
-) -> fn(Room) -> Result(Nil, types.PersistenceError) {
-  fn(room: Room) {
-    let brain_cfg = brain_types.BrainConfig(brain_name: name)
-    let title = "Room opened: " <> room.title
-    let content = build_room_open_text(room)
-    case
-      client.save_snapshot(brain_cfg, title, content, [
-        "neural-link",
-        "room-open",
-      ])
-    {
-      Ok(_) -> Ok(Nil)
-      Error(err) -> Error(map_brain_error(err))
+) -> fn(plugin.PluginEvent) -> Result(Nil, types.PersistenceError) {
+  fn(event: plugin.PluginEvent) {
+    case event {
+      plugin.PluginInit -> Ok(Nil)
+      plugin.RoomOpened(room) -> {
+        let brain_cfg = brain_types.BrainConfig(brain_name: name)
+        let title = "Room opened: " <> room.title
+        let content = build_room_open_text(room)
+        case
+          client.save_snapshot(brain_cfg, title, content, [
+            "neural-link",
+            "room-open",
+          ])
+        {
+          Ok(_) -> Ok(Nil)
+          Error(err) -> Error(map_brain_error(err))
+        }
+      }
+      plugin.RoomClosed(room, message_count, duration_ms) -> {
+        let brain_cfg = brain_types.BrainConfig(brain_name: name)
+        let title = "Room closed: " <> room.title
+        let content = build_room_close_text(room, message_count, duration_ms)
+        case
+          client.save_snapshot(brain_cfg, title, content, [
+            "neural-link",
+            "room-close",
+          ])
+        {
+          Ok(_) -> Ok(Nil)
+          Error(err) -> Error(map_brain_error(err))
+        }
+      }
+      plugin.ConversationArtifact(room, content, _record_id) -> {
+        let brain_cfg = brain_types.BrainConfig(brain_name: name)
+        let title = "Conversation: " <> room.title
+        let room_id = id.room_id_to_string(room.id)
+        let room_tags = room.tags
+        let base_tags = ["neural-link", "conversation", room_id]
+        let tags = list.append(base_tags, room_tags)
+        case
+          client.create_artifact(
+            brain_cfg,
+            title,
+            content,
+            "conversation",
+            tags,
+          )
+        {
+          Ok(_) -> Ok(Nil)
+          Error(err) -> Error(map_brain_error(err))
+        }
+      }
+      plugin.Message(msg) -> {
+        let brain_cfg = brain_types.BrainConfig(brain_name: name)
+        persist_message(brain_cfg, msg, client)
+      }
     }
-  }
-}
-
-fn on_room_close(
-  name: String,
-  client: BrainClient,
-) -> fn(Room, Int, Int) -> Result(Nil, types.PersistenceError) {
-  fn(room: Room, message_count: Int, duration_ms: Int) {
-    let brain_cfg = brain_types.BrainConfig(brain_name: name)
-    let title = "Room closed: " <> room.title
-    let content = build_room_close_text(room, message_count, duration_ms)
-    case
-      client.save_snapshot(brain_cfg, title, content, [
-        "neural-link",
-        "room-close",
-      ])
-    {
-      Ok(_) -> Ok(Nil)
-      Error(err) -> Error(map_brain_error(err))
-    }
-  }
-}
-
-fn on_conversation_artifact(
-  name: String,
-  client: BrainClient,
-) -> fn(Room, String) -> Result(String, types.PersistenceError) {
-  fn(room: Room, content: String) {
-    let brain_cfg = brain_types.BrainConfig(brain_name: name)
-    let title = "Conversation: " <> room.title
-    let room_id = id.room_id_to_string(room.id)
-    let room_tags = room.tags
-    let base_tags = ["neural-link", "conversation", room_id]
-    let tags = list.append(base_tags, room_tags)
-    case
-      client.create_artifact(brain_cfg, title, content, "conversation", tags)
-    {
-      Ok(record_id) -> Ok(record_id)
-      Error(err) -> Error(map_brain_error(err))
-    }
-  }
-}
-
-fn on_message(
-  name: String,
-  client: BrainClient,
-) -> fn(Message) -> Result(Nil, types.PersistenceError) {
-  fn(msg: Message) {
-    let brain_cfg = brain_types.BrainConfig(brain_name: name)
-    persist_message(brain_cfg, msg, client)
   }
 }
 

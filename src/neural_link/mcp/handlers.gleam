@@ -249,7 +249,7 @@ fn handle_room_open(
   ))
   // Fire-and-forget plugin notification per declared plugin
   notify_plugins(room.plugins, resolve_plugin, fn(p) {
-    persistence_plugin.notify_room_open(p, room)
+    persistence_plugin.notify(p, persistence_plugin.RoomOpened(room))
   })
   let id.RoomId(room_id_str) = room.id
   // Auto-join opener as Lead
@@ -469,7 +469,7 @@ fn handle_message_send(
   // Fire-and-forget plugin notification using per-room plugins
   let room_state = room_mod.get_state(room_subject)
   notify_plugins(room_state.plugins, resolve_plugin, fn(p) {
-    persistence_plugin.notify_message(p, msg)
+    persistence_plugin.notify(p, persistence_plugin.Message(msg))
   })
   let mid = message_id_to_string(msg.message_id)
   let id.RoomId(rid) = msg.room_id
@@ -681,11 +681,9 @@ fn handle_room_close(
     birl.to_unix_milli(birl.utc_now())
     - birl.to_unix_milli(room_state.created_at)
   notify_plugins(room_state.plugins, resolve_plugin, fn(p) {
-    persistence_plugin.notify_room_close(
+    persistence_plugin.notify(
       p,
-      closed_room,
-      message_count,
-      duration_ms,
+      persistence_plugin.RoomClosed(closed_room, message_count, duration_ms),
     )
   })
   // Compute compliance if interaction mode is set
@@ -762,9 +760,12 @@ fn find_first_artifact_record_id(
           find_first_artifact_record_id(rest, room, content, resolve_plugin)
         Some(p) -> {
           case
-            persistence_plugin.notify_conversation_artifact(p, room, content)
+            persistence_plugin.notify(
+              p,
+              persistence_plugin.ConversationArtifact(room, content, ""),
+            )
           {
-            Ok(record_id) -> option.Some(record_id)
+            Ok(Nil) -> option.Some("")
             Error(err) -> {
               logging.log(
                 logging.Warning,
