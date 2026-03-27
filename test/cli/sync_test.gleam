@@ -9,6 +9,7 @@ import neural_link/domain/id
 import neural_link/domain/message
 import neural_link/domain/room
 import neural_link/persistence/brain
+import neural_link/persistence/database
 import neural_link/persistence/sqlite
 import neural_link/persistence/sync_log
 import persistence/brain_client_mock
@@ -35,7 +36,7 @@ fn with_store_and_log(f: fn(sqlite.SqliteStore, String) -> Nil) {
   cleanup(db_path)
   cleanup(log_path)
 
-  let assert Ok(store) = sqlite.open(db_path)
+  let assert Ok(store) = database.open(database.File(db_path))
   f(store, log_path)
   sqlite.close(store)
 

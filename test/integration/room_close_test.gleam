@@ -9,6 +9,7 @@ import neural_link/mcp/tools
 import neural_link/mcp/transport/http as http_transport
 import neural_link/persistence/brain
 import neural_link/persistence/config
+import neural_link/persistence/database
 import neural_link/persistence/plugin
 import neural_link/runtime/supervisor
 import persistence/brain_client_mock
@@ -69,7 +70,7 @@ fn start_test_server_with_mock() -> #(
   Subject(brain_client_mock.MockMessage),
 ) {
   let port = 30_000 + erlang_abs(erlang_unique_integer()) % 1000
-  let assert Ok(services) = supervisor.start()
+  let assert Ok(services) = supervisor.start_with_database(database.Memory)
   let assert Ok(mock_started) = brain_client_mock.start_mock_actor()
   let mock_subject = brain_client_mock.mock_actor_subject(mock_started)
 
@@ -472,7 +473,7 @@ pub fn debug_mock_actor_alone_test() {
 
 pub fn debug_http_with_mock_actor_test() {
   let port = 30_000 + erlang_abs(erlang_unique_integer()) % 1000
-  let assert Ok(services) = supervisor.start()
+  let assert Ok(services) = supervisor.start_with_database(database.Memory)
   let assert Ok(mock_started) = brain_client_mock.start_mock_actor()
   let mock_subject = brain_client_mock.mock_actor_subject(mock_started)
 

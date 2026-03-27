@@ -6,6 +6,7 @@ import gleam/string
 import neural_link/brain/client
 import neural_link/brain/types as brain_types
 import neural_link/persistence/brain as brain_persistence
+import neural_link/persistence/database
 import neural_link/persistence/sqlite
 import neural_link/persistence/sync_log
 import neural_link/persistence/types
@@ -32,31 +33,28 @@ type CliConfig {
   CliConfig(db_path: String, sync_log_path: String, brain_name: String)
 }
 
-const default_db_path = "neural_link.db"
-
-const default_sync_log_path = ".neural_link/sync.jsonl"
-
 pub fn run(args: List(String)) -> Nil {
-  let CliConfig(db_path:, sync_log_path:, brain_name:) = parse_config(args)
-
-  case sqlite.open(db_path) {
-    Error(err) ->
-      io.println_error(
-        "sync: failed to open sqlite store: " <> types.error_to_string(err),
-      )
-    Ok(store) -> {
-      let result =
-        sync_rooms_with_brain(
-          store,
-          sync_log_path,
-          brain_name,
-          brain_persistence.BrainClient(
-            save_snapshot: client.save_snapshot,
-            create_artifact: client.create_artifact,
-          ),
-        )
-      sqlite.close(store)
-      print_summary(result)
+  case parse_config(args) {
+    Error(error) -> io.println_error(error)
+    Ok(CliConfig(db_path:, sync_log_path:, brain_name:)) -> {
+      case database.open(database.File(db_path)) {
+        Error(err) ->
+          io.println_error("sync: failed to open sqlite store: " <> err)
+        Ok(store) -> {
+          let result =
+            sync_rooms_with_brain(
+              store,
+              sync_log_path,
+              brain_name,
+              brain_persistence.BrainClient(
+                save_snapshot: client.save_snapshot,
+                create_artifact: client.create_artifact,
+              ),
+            )
+          sqlite.close(store)
+          print_summary(result)
+        }
+      }
     }
   }
 }
@@ -251,15 +249,25 @@ fn describe_brain_error(err: brain_types.BrainError) -> String {
   }
 }
 
-fn parse_config(args: List(String)) -> CliConfig {
-  parse_args(
-    args,
-    CliConfig(
-      db_path: default_db_path,
-      sync_log_path: default_sync_log_path,
-      brain_name: "",
-    ),
-  )
+fn parse_config(args: List(String)) -> Result(CliConfig, String) {
+  case database.runtime_paths() {
+    Error(error) -> Error("sync: failed to resolve runtime paths: " <> error)
+    Ok(runtime_paths) -> {
+      let database.RuntimePaths(
+        data_dir: _data_dir,
+        db_path: db_path,
+        sync_log_path: sync_log_path,
+      ) = runtime_paths
+      Ok(parse_args(
+        args,
+        CliConfig(
+          db_path: db_path,
+          sync_log_path: sync_log_path,
+          brain_name: "",
+        ),
+      ))
+    }
+  }
 }
 
 fn parse_args(args: List(String), config: CliConfig) -> CliConfig {

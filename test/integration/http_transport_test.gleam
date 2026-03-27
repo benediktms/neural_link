@@ -5,6 +5,7 @@ import gleeunit/should
 import neural_link/mcp/handlers
 import neural_link/mcp/tools
 import neural_link/mcp/transport/http as http_transport
+import neural_link/persistence/database
 import neural_link/runtime/supervisor
 
 // ---------------------------------------------------------------------------
@@ -492,7 +493,7 @@ pub fn http_inbox_count_tracks_pending_messages_test() {
 
 fn start_test_server() -> Int {
   let port = 19_000 + erlang_abs(erlang_unique_integer()) % 1000
-  let assert Ok(services) = supervisor.start()
+  let assert Ok(services) = supervisor.start_with_database(database.Memory)
   let tool_defs = tools.all_tools()
   let handler =
     handlers.make_handler(handlers.HandlerConfig(

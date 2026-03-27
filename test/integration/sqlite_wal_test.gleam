@@ -7,9 +7,9 @@ import gleeunit/should
 import neural_link/mcp/handlers
 import neural_link/mcp/tools
 import neural_link/mcp/transport/http as http_transport
+import neural_link/persistence/database
 import neural_link/persistence/sqlite
 import neural_link/runtime/supervisor
-import simplifile
 import sqlight
 
 @external(erlang, "neural_link_http_test_ffi", "http_post")
@@ -26,13 +26,6 @@ fn erlang_abs(n: Int) -> Int {
   case n < 0 {
     True -> -n
     False -> n
-  }
-}
-
-fn cleanup(path: String) {
-  case simplifile.delete(file_or_dir_at: path) {
-    Ok(Nil) -> Nil
-    Error(_) -> Nil
   }
 }
 
@@ -205,10 +198,8 @@ fn room_close(
 }
 
 pub fn full_room_lifecycle_sqlite_test() {
-  cleanup("neural_link.db")
-
   let port = 31_000 + erlang_abs(erlang_unique_integer()) % 1000
-  let assert Ok(services) = supervisor.start()
+  let assert Ok(services) = supervisor.start_with_database(database.Memory)
 
   let handler =
     handlers.make_handler(handlers.HandlerConfig(
@@ -283,5 +274,4 @@ pub fn full_room_lifecycle_sqlite_test() {
   participant_counts |> should.equal([2])
 
   sqlite.close(store)
-  cleanup("neural_link.db")
 }
