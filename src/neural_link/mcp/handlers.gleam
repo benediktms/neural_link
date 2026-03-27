@@ -23,6 +23,7 @@ import neural_link/mcp/transport
 import neural_link/persistence/brain as brain_persistence
 import neural_link/persistence/config.{type PersistencePluginConfig}
 import neural_link/persistence/plugin as persistence_plugin
+import neural_link/persistence/sqlite
 import neural_link/persistence/types as persistence_types
 import neural_link/runtime/inbox as inbox_mod
 import neural_link/runtime/presence as presence_mod
@@ -38,6 +39,7 @@ pub type HandlerConfig {
     registry: Subject(registry_mod.RegistryMessage),
     inbox: Subject(inbox_mod.InboxMessage),
     presence: Subject(presence_mod.PresenceMessage),
+    store: sqlite.SqliteStore,
   )
 }
 
@@ -72,22 +74,26 @@ fn do_make_handler(
   resolve_plugin: fn(PersistencePluginConfig) ->
     Option(persistence_plugin.PersistencePlugin),
 ) -> transport.ToolCallHandler {
-  let HandlerConfig(registry: registry, inbox: inbox, presence: presence) =
-    config
+  let HandlerConfig(
+    registry: registry,
+    inbox: inbox,
+    presence: presence,
+    store: store,
+  ) = config
   fn(tool_name: String, arguments: Option(Dynamic)) -> Result(json.Json, String) {
     case tool_name {
       "room_open" ->
-        handle_room_open(registry, presence, arguments, resolve_plugin)
-      "room_join" -> handle_room_join(registry, presence, arguments)
+        handle_room_open(registry, presence, store, arguments, resolve_plugin)
+      "room_join" -> handle_room_join(registry, presence, store, arguments)
       "room_leave" -> handle_room_leave(registry, inbox, presence, arguments)
       "message_send" ->
-        handle_message_send(registry, inbox, arguments, resolve_plugin)
+        handle_message_send(registry, inbox, store, arguments, resolve_plugin)
       "inbox_read" -> handle_inbox_read(registry, arguments)
       "message_ack" -> handle_message_ack(registry, arguments)
       "wait_for" -> handle_wait_for(registry, inbox, arguments)
       "thread_summarize" -> handle_thread_summarize(registry, arguments)
       "room_close" ->
-        handle_room_close(registry, presence, arguments, resolve_plugin)
+        handle_room_close(registry, presence, store, arguments, resolve_plugin)
       _ -> Error("Unknown tool: " <> tool_name)
     }
   }
@@ -211,6 +217,7 @@ fn with_inbox_nudge(
 fn handle_room_open(
   registry: Subject(registry_mod.RegistryMessage),
   presence: Subject(presence_mod.PresenceMessage),
+  store: sqlite.SqliteStore,
   arguments: Option(Dynamic),
   resolve_plugin: fn(PersistencePluginConfig) ->
     Option(persistence_plugin.PersistencePlugin),
@@ -257,6 +264,32 @@ fn handle_room_open(
     participant_domain.new(pid_str, display_name, participant_domain.Lead)
   use room_subject <- result.try(registry_mod.get_room(registry, room_id_str))
   use _ <- result.try(room_mod.join(room_subject, lead))
+  case sqlite.insert_room(store, room) {
+    Ok(_) -> Nil
+    Error(e) ->
+      logging.log(
+        logging.Warning,
+        "SQLite insert_room failed: " <> persistence_types.error_to_string(e),
+      )
+  }
+  case
+    sqlite.insert_participant(
+      store,
+      room_id_str,
+      id.participant_id_to_string(lead.id),
+      lead.display_name,
+      "lead",
+      birl.to_iso8601(birl.utc_now()),
+    )
+  {
+    Ok(_) -> Nil
+    Error(e) ->
+      logging.log(
+        logging.Warning,
+        "SQLite insert_participant failed: "
+          <> persistence_types.error_to_string(e),
+      )
+  }
   presence_mod.register(presence, ParticipantId(pid_str), room_id_str, 300_000)
   Ok(
     json.object([
@@ -276,6 +309,7 @@ fn handle_room_open(
 fn handle_room_join(
   registry: Subject(registry_mod.RegistryMessage),
   presence: Subject(presence_mod.PresenceMessage),
+  store: sqlite.SqliteStore,
   arguments: Option(Dynamic),
 ) -> Result(json.Json, String) {
   use params <- result.try(require_params(arguments))
@@ -290,6 +324,24 @@ fn handle_room_join(
   let agent_id = get_optional_string_param(params, "agent_id")
   use room_subject <- result.try(registry_mod.get_room(registry, room_id))
   use _ <- result.try(room_mod.join(room_subject, p))
+  case
+    sqlite.insert_participant(
+      store,
+      room_id,
+      id.participant_id_to_string(p.id),
+      p.display_name,
+      participant_domain.role_to_string(p.role),
+      birl.to_iso8601(birl.utc_now()),
+    )
+  {
+    Ok(_) -> Nil
+    Error(e) ->
+      logging.log(
+        logging.Warning,
+        "SQLite insert_participant failed: "
+          <> persistence_types.error_to_string(e),
+      )
+  }
   // Register in presence tracker
   presence_mod.register(
     presence,
@@ -432,6 +484,7 @@ fn handle_room_leave(
 fn handle_message_send(
   registry: Subject(registry_mod.RegistryMessage),
   inbox: Subject(inbox_mod.InboxMessage),
+  store: sqlite.SqliteStore,
   arguments: Option(Dynamic),
   resolve_plugin: fn(PersistencePluginConfig) ->
     Option(persistence_plugin.PersistencePlugin),
@@ -471,6 +524,19 @@ fn handle_message_send(
   notify_plugins(room_state.plugins, resolve_plugin, fn(p) {
     persistence_plugin.notify(p, persistence_plugin.Message(msg))
   })
+  case message.is_durable(msg.kind) {
+    True ->
+      case sqlite.insert_message(store, msg) {
+        Ok(_) -> Nil
+        Error(e) ->
+          logging.log(
+            logging.Warning,
+            "SQLite insert_message failed: "
+              <> persistence_types.error_to_string(e),
+          )
+      }
+    False -> Nil
+  }
   let mid = message_id_to_string(msg.message_id)
   let id.RoomId(rid) = msg.room_id
   Ok(
@@ -647,6 +713,7 @@ fn handle_thread_summarize(
 fn handle_room_close(
   registry: Subject(registry_mod.RegistryMessage),
   presence: Subject(presence_mod.PresenceMessage),
+  store: sqlite.SqliteStore,
   arguments: Option(Dynamic),
   resolve_plugin: fn(PersistencePluginConfig) ->
     Option(persistence_plugin.PersistencePlugin),
@@ -680,6 +747,26 @@ fn handle_room_close(
   let duration_ms =
     birl.to_unix_milli(birl.utc_now())
     - birl.to_unix_milli(room_state.created_at)
+  case
+    sqlite.update_room_close(store, closed_room, message_count, duration_ms)
+  {
+    Ok(_) -> Nil
+    Error(e) ->
+      logging.log(
+        logging.Warning,
+        "SQLite update_room_close failed: "
+          <> persistence_types.error_to_string(e),
+      )
+  }
+  case sqlite.insert_conversation_artifact(store, closed_room, conv.content) {
+    Ok(_record_id) -> Nil
+    Error(e) ->
+      logging.log(
+        logging.Warning,
+        "SQLite insert_conversation_artifact failed: "
+          <> persistence_types.error_to_string(e),
+      )
+  }
   notify_plugins(room_state.plugins, resolve_plugin, fn(p) {
     persistence_plugin.notify(
       p,

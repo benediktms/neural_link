@@ -26,6 +26,7 @@ fn run_foreground() -> Nil {
           registry: services.registry,
           inbox: services.inbox,
           presence: services.presence,
+          store: services.store,
         ))
       case config.load_transport() {
         config.Http ->

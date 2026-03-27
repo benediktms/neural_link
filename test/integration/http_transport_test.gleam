@@ -499,6 +499,7 @@ fn start_test_server() -> Int {
       registry: services.registry,
       inbox: services.inbox,
       presence: services.presence,
+      store: services.store,
     ))
   let assert Ok(_) =
     http_transport.start_server(
