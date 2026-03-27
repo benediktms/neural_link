@@ -93,6 +93,7 @@ fn start_test_server_with_mock() -> #(
         registry: services.registry,
         inbox: services.inbox,
         presence: services.presence,
+        store: services.store,
       ),
       plugin_resolver,
     )
@@ -495,6 +496,7 @@ pub fn debug_http_with_mock_actor_test() {
         registry: services.registry,
         inbox: services.inbox,
         presence: services.presence,
+        store: services.store,
       ),
       plugin_resolver,
     )
