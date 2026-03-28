@@ -181,9 +181,7 @@ fn handle_request(
 ) -> response.Response(ResponseData) {
   case req.method, request.path_segments(req) {
     http.Post, ["mcp"] -> handle_mcp_post(req, tools, handler, sessions)
-    _, ["mcp"] ->
-      response.new(405)
-      |> response.set_body(mist.Bytes(bytes_tree.new()))
+    _, ["mcp"] -> json_error_response(405, "Method not allowed for /mcp")
     http.Get, ["inbox", participant_id, "count"] ->
       handle_inbox_count(participant_id, registry, presence)
     http.Get, ["agent", agent_id, "inbox", "count"] ->
@@ -194,9 +192,7 @@ fn handle_request(
         mist.Bytes(bytes_tree.from_string("{\"status\":\"ok\"}")),
       )
       |> response.set_header("content-type", "application/json")
-    _, _ ->
-      response.new(404)
-      |> response.set_body(mist.Bytes(bytes_tree.new()))
+    _, _ -> json_error_response(404, "Not found")
   }
 }
 

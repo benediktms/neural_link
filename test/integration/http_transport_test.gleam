@@ -77,6 +77,28 @@ pub fn http_rejects_missing_session_test() {
   let assert Ok(#(401, _, _)) = http_post(url, body, [])
 }
 
+pub fn http_mcp_get_returns_json_error_test() {
+  let port = start_test_server()
+  let url = "http://localhost:" <> int.to_string(port) <> "/mcp"
+
+  let assert Ok(#(405, resp_body, headers)) = http_get(url, [])
+  string.contains(resp_body, "Method not allowed for /mcp") |> should.be_true
+  let content_type = find_header(headers, "content-type")
+  content_type |> should.be_ok
+}
+
+pub fn http_unknown_post_returns_json_error_test() {
+  let port = start_test_server()
+  let url = "http://localhost:" <> int.to_string(port) <> "/"
+
+  let body =
+    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"
+  let assert Ok(#(404, resp_body, headers)) = http_post(url, body, [])
+  string.contains(resp_body, "Not found") |> should.be_true
+  let content_type = find_header(headers, "content-type")
+  content_type |> should.be_ok
+}
+
 pub fn http_room_lifecycle_test() {
   let port = start_test_server()
   let url = "http://localhost:" <> int.to_string(port) <> "/mcp"
