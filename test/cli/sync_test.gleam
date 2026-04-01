@@ -9,40 +9,10 @@ import neural_link/domain/id
 import neural_link/domain/message
 import neural_link/domain/room
 import neural_link/persistence/brain
-import neural_link/persistence/database
 import neural_link/persistence/sqlite
 import neural_link/persistence/sync_log
 import persistence/brain_client_mock
-import simplifile
-
-fn cleanup(path: String) {
-  case simplifile.delete(file_or_dir_at: path) {
-    Ok(Nil) -> Nil
-    Error(_) -> Nil
-  }
-}
-
-fn test_db_path() -> String {
-  "/tmp/" <> id.generate("sync_cli_test_") <> ".db"
-}
-
-fn test_log_path() -> String {
-  "/tmp/" <> id.generate("sync_cli_log_") <> ".jsonl"
-}
-
-fn with_store_and_log(f: fn(sqlite.SqliteStore, String) -> Nil) {
-  let db_path = test_db_path()
-  let log_path = test_log_path()
-  cleanup(db_path)
-  cleanup(log_path)
-
-  let assert Ok(store) = database.open(database.File(db_path))
-  f(store, log_path)
-  sqlite.close(store)
-
-  cleanup(db_path)
-  cleanup(log_path)
-}
+import support/db_helpers
 
 fn insert_closed_room(
   store: sqlite.SqliteStore,
@@ -52,7 +22,7 @@ fn insert_closed_room(
   let open_room = room.new(room_id, title)
   let assert Ok(_) = sqlite.insert_room(store, open_room)
   let closed_room = room.close_with_resolution(open_room, room.Completed)
-  let assert Ok(_) = sqlite.update_room_close(store, closed_room, 0, 0)
+  let assert Ok(_) = sqlite.update_room_close(store, closed_room)
   Nil
 }
 
@@ -95,7 +65,7 @@ fn insert_message(
 }
 
 pub fn sync_pushes_unsynced_rooms_test() {
-  with_store_and_log(fn(store, log_path) {
+  db_helpers.with_store_and_log("sync_cli_test_", fn(store, log_path) {
     insert_closed_room(store, "room_unsynced", "Unsynced Room")
     insert_message(store, "room_unsynced", 1, "Summary one")
 
@@ -120,7 +90,7 @@ pub fn sync_pushes_unsynced_rooms_test() {
 }
 
 pub fn sync_skips_already_synced_test() {
-  with_store_and_log(fn(store, log_path) {
+  db_helpers.with_store_and_log("sync_cli_test_", fn(store, log_path) {
     insert_closed_room(store, "room_already", "Already Synced Room")
     insert_message(store, "room_already", 1, "Existing summary")
     let assert Ok(_) = sync_log.mark_synced(log_path, "room_already", "")
@@ -145,7 +115,7 @@ pub fn sync_skips_already_synced_test() {
 }
 
 pub fn sync_handles_errors_gracefully_test() {
-  with_store_and_log(fn(store, log_path) {
+  db_helpers.with_store_and_log("sync_cli_test_", fn(store, log_path) {
     insert_closed_room(store, "room_error", "Error Room")
     insert_message(store, "room_error", 1, "Will fail")
 

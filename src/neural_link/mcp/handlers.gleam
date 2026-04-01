@@ -747,9 +747,7 @@ fn handle_room_close(
   let duration_ms =
     birl.to_unix_milli(birl.utc_now())
     - birl.to_unix_milli(room_state.created_at)
-  case
-    sqlite.update_room_close(store, closed_room, message_count, duration_ms)
-  {
+  case sqlite.update_room_close(store, closed_room) {
     Ok(_) -> Nil
     Error(e) ->
       logging.log(
@@ -852,7 +850,7 @@ fn find_first_artifact_record_id(
               persistence_plugin.ConversationArtifact(room, content, ""),
             )
           {
-            Ok(Nil) -> option.Some("")
+            Ok(Nil) -> option.None
             Error(err) -> {
               logging.log(
                 logging.Warning,

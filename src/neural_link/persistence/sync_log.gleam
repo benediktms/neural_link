@@ -2,6 +2,7 @@ import birl
 import gleam/dynamic/decode
 import gleam/json
 import gleam/list
+import gleam/set.{type Set}
 import gleam/string
 import simplifile
 
@@ -24,6 +25,24 @@ pub fn is_synced(log_path: String, room_id: String) -> Bool {
         }
       })
     Error(_) -> False
+  }
+}
+
+/// Load all synced room IDs at once. Use this to avoid re-reading the file
+/// per room when checking multiple rooms in a batch.
+pub fn load_synced_ids(log_path: String) -> Set(String) {
+  case simplifile.read(from: log_path) {
+    Ok(contents) ->
+      contents
+      |> lines()
+      |> list.filter_map(fn(line) {
+        case decode_entry(line) {
+          Ok(SyncEntry(room_id, _, _)) -> Ok(room_id)
+          Error(_) -> Error(Nil)
+        }
+      })
+      |> set.from_list
+    Error(_) -> set.new()
   }
 }
 

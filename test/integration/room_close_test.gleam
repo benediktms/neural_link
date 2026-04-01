@@ -13,6 +13,7 @@ import neural_link/persistence/database
 import neural_link/persistence/plugin
 import neural_link/runtime/supervisor
 import persistence/brain_client_mock
+import support/http_helpers
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -25,42 +26,6 @@ fn http_post(
   headers: List(#(String, String)),
 ) -> Result(#(Int, String, List(#(String, String))), String)
 
-@external(erlang, "erlang", "unique_integer")
-fn erlang_unique_integer() -> Int
-
-fn erlang_abs(n: Int) -> Int {
-  case n < 0 {
-    True -> -n
-    False -> n
-  }
-}
-
-fn find_header(
-  headers: List(#(String, String)),
-  name: String,
-) -> Result(String, Nil) {
-  case headers {
-    [] -> Error(Nil)
-    [#(k, v), ..rest] ->
-      case string.lowercase(k) == string.lowercase(name) {
-        True -> Ok(v)
-        False -> find_header(rest, name)
-      }
-  }
-}
-
-fn extract_json_string(body: String, key: String) -> Result(String, String) {
-  let pattern = "\\\"" <> key <> "\\\":\\\""
-  case string.split(body, pattern) {
-    [_, rest, ..] ->
-      case string.split(rest, "\\\"") {
-        [value, ..] -> Ok(value)
-        _ -> Error("key not found")
-      }
-    _ -> Error("key not found")
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Test server with mock BrainClient
 // ---------------------------------------------------------------------------
@@ -69,7 +34,10 @@ fn start_test_server_with_mock() -> #(
   Int,
   Subject(brain_client_mock.MockMessage),
 ) {
-  let port = 30_000 + erlang_abs(erlang_unique_integer()) % 1000
+  let port =
+    30_000
+    + http_helpers.erlang_abs(http_helpers.erlang_unique_integer())
+    % 1000
   let assert Ok(services) = supervisor.start_with_database(database.Memory)
   let assert Ok(mock_started) = brain_client_mock.start_mock_actor()
   let mock_subject = brain_client_mock.mock_actor_subject(mock_started)
@@ -116,7 +84,7 @@ fn make_session(url: String) -> String {
     "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"
   case retry_session_http(url, body, [], 5) {
     Ok(#(200, _, headers)) -> {
-      let assert Ok(sid) = find_header(headers, "mcp-session-id")
+      let assert Ok(sid) = http_helpers.find_header(headers, "mcp-session-id")
       sid
     }
     Ok(#(code, resp, _)) -> {
@@ -175,7 +143,7 @@ fn room_open(
     <> args
     <> "}}"
   case http_post(url, body, h) {
-    Ok(#(200, resp, _)) -> extract_json_string(resp, "room_id")
+    Ok(#(200, resp, _)) -> http_helpers.extract_json_string(resp, "room_id")
     Ok(#(code, resp, _)) ->
       Error("room_open failed: " <> int.to_string(code) <> " " <> resp)
     Error(e) -> Error(e)
@@ -234,7 +202,7 @@ fn message_send(
     <> args
     <> "}}"
   case http_post(url, body, h) {
-    Ok(#(200, resp, _)) -> extract_json_string(resp, "message_id")
+    Ok(#(200, resp, _)) -> http_helpers.extract_json_string(resp, "message_id")
     Ok(#(code, resp, _)) ->
       Error("message_send failed: " <> int.to_string(code) <> " " <> resp)
     Error(e) -> Error(e)
@@ -348,8 +316,11 @@ pub fn room_close_with_brain_plugin_returns_artifact_record_id_test() {
     message_send(url, sid, room_id, "agent-a", "decision", "Final decision")
   let assert Ok(resp) = room_close(url, sid, room_id, "completed")
 
-  let assert Ok(record_id) = extract_json_string(resp, "artifact_record_id")
-  record_id |> should.equal("")
+  // artifact_record_id should be null when the plugin can't return a real ID
+  // (plugin.notify returns Result(Nil, _), not a record ID)
+  http_helpers.extract_json_string(resp, "artifact_record_id")
+  |> should.be_error
+  string.contains(resp, "artifact_record_id") |> should.be_true
 }
 
 pub fn room_close_with_brain_plugin_calls_notify_conversation_artifact_test() {
@@ -436,7 +407,7 @@ pub fn room_close_cancelled_resolution_stored_correctly_test() {
     message_send(url, sid, room_id, "agent-a", "decision", "Going nowhere")
   let assert Ok(resp) = room_close(url, sid, room_id, "cancelled")
 
-  extract_json_string(resp, "status") |> should.equal(Ok("closed"))
+  http_helpers.extract_json_string(resp, "status") |> should.equal(Ok("closed"))
 }
 
 pub fn room_close_no_brains_param_no_plugin_calls_test() {
@@ -472,7 +443,10 @@ pub fn debug_mock_actor_alone_test() {
 }
 
 pub fn debug_http_with_mock_actor_test() {
-  let port = 30_000 + erlang_abs(erlang_unique_integer()) % 1000
+  let port =
+    30_000
+    + http_helpers.erlang_abs(http_helpers.erlang_unique_integer())
+    % 1000
   let assert Ok(services) = supervisor.start_with_database(database.Memory)
   let assert Ok(mock_started) = brain_client_mock.start_mock_actor()
   let mock_subject = brain_client_mock.mock_actor_subject(mock_started)

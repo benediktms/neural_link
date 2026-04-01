@@ -7,6 +7,7 @@ import neural_link/mcp/tools
 import neural_link/mcp/transport/http as http_transport
 import neural_link/persistence/database
 import neural_link/runtime/supervisor
+import support/http_helpers
 
 // ---------------------------------------------------------------------------
 // FFI: Erlang httpc client
@@ -41,7 +42,7 @@ pub fn http_initialize_returns_session_test() {
   string.contains(resp_body, "protocolVersion") |> should.be_true
 
   // Should have mcp-session-id header
-  let session_id = find_header(headers, "mcp-session-id")
+  let session_id = http_helpers.find_header(headers, "mcp-session-id")
   session_id |> should.be_ok
 }
 
@@ -53,7 +54,8 @@ pub fn http_tools_list_returns_9_tools_test() {
   let init_body =
     "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"
   let assert Ok(#(200, _, init_headers)) = http_post(url, init_body, [])
-  let assert Ok(session_id) = find_header(init_headers, "mcp-session-id")
+  let assert Ok(session_id) =
+    http_helpers.find_header(init_headers, "mcp-session-id")
 
   // List tools
   let tools_body =
@@ -83,7 +85,7 @@ pub fn http_mcp_get_returns_json_error_test() {
 
   let assert Ok(#(405, resp_body, headers)) = http_get(url, [])
   string.contains(resp_body, "Method not allowed for /mcp") |> should.be_true
-  let content_type = find_header(headers, "content-type")
+  let content_type = http_helpers.find_header(headers, "content-type")
   content_type |> should.be_ok
 }
 
@@ -95,7 +97,7 @@ pub fn http_unknown_post_returns_json_error_test() {
     "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"
   let assert Ok(#(404, resp_body, headers)) = http_post(url, body, [])
   string.contains(resp_body, "Not found") |> should.be_true
-  let content_type = find_header(headers, "content-type")
+  let content_type = http_helpers.find_header(headers, "content-type")
   content_type |> should.be_ok
 }
 
@@ -110,7 +112,7 @@ pub fn http_room_lifecycle_test() {
       "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
       [],
     )
-  let assert Ok(sid) = find_header(init_headers, "mcp-session-id")
+  let assert Ok(sid) = http_helpers.find_header(init_headers, "mcp-session-id")
   let h = [#("mcp-session-id", sid)]
 
   // Open room
@@ -135,7 +137,7 @@ pub fn http_message_send_includes_inbox_pending_test() {
       "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
       [],
     )
-  let assert Ok(sid) = find_header(init_headers, "mcp-session-id")
+  let assert Ok(sid) = http_helpers.find_header(init_headers, "mcp-session-id")
   let h = [#("mcp-session-id", sid)]
 
   // Open room
@@ -146,7 +148,8 @@ pub fn http_message_send_includes_inbox_pending_test() {
       h,
     )
   // Extract room_id from response
-  let assert Ok(room_id) = extract_json_string(open_resp, "room_id")
+  let assert Ok(room_id) =
+    http_helpers.extract_json_string(open_resp, "room_id")
 
   // Join two participants
   let join_a =
@@ -204,7 +207,7 @@ pub fn http_agent_inbox_count_tracks_via_agent_id_test() {
       "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
       [],
     )
-  let assert Ok(sid) = find_header(init_headers, "mcp-session-id")
+  let assert Ok(sid) = http_helpers.find_header(init_headers, "mcp-session-id")
   let h = [#("mcp-session-id", sid)]
 
   // Open room
@@ -214,7 +217,8 @@ pub fn http_agent_inbox_count_tracks_via_agent_id_test() {
       "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Agent ID Test\",\"participant_id\":\"lead\",\"display_name\":\"Lead\"}}}",
       h,
     )
-  let assert Ok(room_id) = extract_json_string(open_resp, "room_id")
+  let assert Ok(room_id) =
+    http_helpers.extract_json_string(open_resp, "room_id")
 
   // Join sender (no agent_id)
   let join_sender =
@@ -260,7 +264,7 @@ pub fn http_concurrent_agents_isolated_inbox_counts_test() {
       "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
       [],
     )
-  let assert Ok(sid) = find_header(init_headers, "mcp-session-id")
+  let assert Ok(sid) = http_helpers.find_header(init_headers, "mcp-session-id")
   let h = [#("mcp-session-id", sid)]
 
   // Open room
@@ -270,7 +274,8 @@ pub fn http_concurrent_agents_isolated_inbox_counts_test() {
       "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Concurrency Test\",\"participant_id\":\"lead\",\"display_name\":\"Lead\"}}}",
       h,
     )
-  let assert Ok(room_id) = extract_json_string(open_resp, "room_id")
+  let assert Ok(room_id) =
+    http_helpers.extract_json_string(open_resp, "room_id")
 
   // Join lead (no agent_id)
   let join_lead =
@@ -321,7 +326,8 @@ pub fn http_concurrent_agents_isolated_inbox_counts_test() {
     <> room_id
     <> "\",\"participant_id\":\"drone-1\"}}}"
   let assert Ok(#(200, inbox_d1, _)) = http_post(mcp_url, read_d1, h)
-  let assert Ok(msg_id) = extract_json_string(inbox_d1, "message_id")
+  let assert Ok(msg_id) =
+    http_helpers.extract_json_string(inbox_d1, "message_id")
 
   let ack_d1 =
     "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"message_ack\",\"arguments\":{\"room_id\":\""
@@ -350,7 +356,7 @@ pub fn http_agent_id_isolation_across_rooms_test() {
       "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
       [],
     )
-  let assert Ok(sid) = find_header(init_headers, "mcp-session-id")
+  let assert Ok(sid) = http_helpers.find_header(init_headers, "mcp-session-id")
   let h = [#("mcp-session-id", sid)]
 
   // Open two rooms
@@ -360,7 +366,7 @@ pub fn http_agent_id_isolation_across_rooms_test() {
       "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Room A\",\"participant_id\":\"lead-a\",\"display_name\":\"Lead A\"}}}",
       h,
     )
-  let assert Ok(room_a) = extract_json_string(open1, "room_id")
+  let assert Ok(room_a) = http_helpers.extract_json_string(open1, "room_id")
 
   let assert Ok(#(200, open2, _)) =
     http_post(
@@ -368,7 +374,7 @@ pub fn http_agent_id_isolation_across_rooms_test() {
       "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Room B\",\"participant_id\":\"lead-b\",\"display_name\":\"Lead B\"}}}",
       h,
     )
-  let assert Ok(room_b) = extract_json_string(open2, "room_id")
+  let assert Ok(room_b) = http_helpers.extract_json_string(open2, "room_id")
 
   // Agent joins both rooms with the same agent_id but different participant_ids
   // This tests that agent_id maps to the participant_id from the LAST join
@@ -447,7 +453,7 @@ pub fn http_inbox_count_tracks_pending_messages_test() {
       "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
       [],
     )
-  let assert Ok(sid) = find_header(init_headers, "mcp-session-id")
+  let assert Ok(sid) = http_helpers.find_header(init_headers, "mcp-session-id")
   let h = [#("mcp-session-id", sid)]
 
   // Open room
@@ -457,7 +463,8 @@ pub fn http_inbox_count_tracks_pending_messages_test() {
       "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Count Test\",\"participant_id\":\"lead\",\"display_name\":\"Lead\"}}}",
       h,
     )
-  let assert Ok(room_id) = extract_json_string(open_resp, "room_id")
+  let assert Ok(room_id) =
+    http_helpers.extract_json_string(open_resp, "room_id")
 
   // Join two participants
   let join_a =
@@ -494,7 +501,8 @@ pub fn http_inbox_count_tracks_pending_messages_test() {
     <> room_id
     <> "\",\"participant_id\":\"receiver\"}}}"
   let assert Ok(#(200, inbox_resp, _)) = http_post(mcp_url, read_inbox, h)
-  let assert Ok(msg_id) = extract_json_string(inbox_resp, "message_id")
+  let assert Ok(msg_id) =
+    http_helpers.extract_json_string(inbox_resp, "message_id")
 
   let ack =
     "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"message_ack\",\"arguments\":{\"room_id\":\""
@@ -514,7 +522,10 @@ pub fn http_inbox_count_tracks_pending_messages_test() {
 // ---------------------------------------------------------------------------
 
 fn start_test_server() -> Int {
-  let port = 19_000 + erlang_abs(erlang_unique_integer()) % 1000
+  let port =
+    19_000
+    + http_helpers.erlang_abs(http_helpers.erlang_unique_integer())
+    % 1000
   let assert Ok(services) = supervisor.start_with_database(database.Memory)
   let tool_defs = tools.all_tools()
   let handler =
@@ -535,43 +546,4 @@ fn start_test_server() -> Int {
   // Give the server time to bind
   process.sleep(100)
   port
-}
-
-@external(erlang, "erlang", "unique_integer")
-fn erlang_unique_integer() -> Int
-
-fn erlang_abs(n: Int) -> Int {
-  case n < 0 {
-    True -> -n
-    False -> n
-  }
-}
-
-/// Extract a string value from an MCP tool response by key.
-/// MCP wraps tool output in a content block with escaped JSON, so we search
-/// for the escaped pattern: \"key\":\"value\"
-fn extract_json_string(body: String, key: String) -> Result(String, Nil) {
-  let pattern = "\\\"" <> key <> "\\\":\\\""
-  case string.split(body, pattern) {
-    [_, rest, ..] ->
-      case string.split(rest, "\\\"") {
-        [value, ..] -> Ok(value)
-        _ -> Error(Nil)
-      }
-    _ -> Error(Nil)
-  }
-}
-
-fn find_header(
-  headers: List(#(String, String)),
-  name: String,
-) -> Result(String, Nil) {
-  case headers {
-    [] -> Error(Nil)
-    [#(k, v), ..rest] ->
-      case string.lowercase(k) == string.lowercase(name) {
-        True -> Ok(v)
-        False -> find_header(rest, name)
-      }
-  }
 }

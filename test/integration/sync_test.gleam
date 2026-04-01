@@ -8,40 +8,11 @@ import neural_link/cli/sync
 import neural_link/domain/id
 import neural_link/domain/message
 import neural_link/domain/room
-import neural_link/persistence/database
 import neural_link/persistence/sqlite
 import neural_link/persistence/sync_log
 import persistence/brain_client_mock
 import simplifile
-
-fn cleanup(path: String) {
-  case simplifile.delete(file_or_dir_at: path) {
-    Ok(Nil) -> Nil
-    Error(_) -> Nil
-  }
-}
-
-fn test_db_path() -> String {
-  "/tmp/" <> id.generate("sync_e2e_test_") <> ".db"
-}
-
-fn test_log_path() -> String {
-  "/tmp/" <> id.generate("sync_e2e_test_") <> ".jsonl"
-}
-
-fn with_store_and_log(f: fn(sqlite.SqliteStore, String) -> Nil) {
-  let db_path = test_db_path()
-  let log_path = test_log_path()
-  cleanup(db_path)
-  cleanup(log_path)
-
-  let assert Ok(store) = database.open(database.File(db_path))
-  f(store, log_path)
-  sqlite.close(store)
-
-  cleanup(db_path)
-  cleanup(log_path)
-}
+import support/db_helpers
 
 fn make_message(
   message_id: String,
@@ -96,12 +67,12 @@ fn insert_test_closed_room(
     )
 
   let closed_room = room.close_with_resolution(open_room, room.Completed)
-  let assert Ok(_) = sqlite.update_room_close(store, closed_room, 2, 0)
+  let assert Ok(_) = sqlite.update_room_close(store, closed_room)
   Nil
 }
 
 pub fn sync_pushes_closed_room_test() {
-  with_store_and_log(fn(store, log_path) {
+  db_helpers.with_store_and_log("sync_e2e_test_", fn(store, log_path) {
     let room_id = "room_sync_pushes"
     let title = "Sync E2E Room"
     insert_test_closed_room(store, room_id, title)
@@ -146,7 +117,7 @@ pub fn sync_pushes_closed_room_test() {
 }
 
 pub fn sync_idempotent_test() {
-  with_store_and_log(fn(store, log_path) {
+  db_helpers.with_store_and_log("sync_e2e_test_", fn(store, log_path) {
     let room_id = "room_sync_idempotent"
     let title = "Sync Idempotent Room"
     insert_test_closed_room(store, room_id, title)

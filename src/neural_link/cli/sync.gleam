@@ -2,6 +2,7 @@ import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/set.{type Set}
 import gleam/string
 import neural_link/brain/client
 import neural_link/brain/types as brain_types
@@ -13,15 +14,6 @@ import neural_link/persistence/types
 
 pub type SyncResult {
   SyncResult(
-    total_closed_rooms: Int,
-    already_synced: Int,
-    synced: Int,
-    failed: Int,
-  )
-}
-
-type SyncStats {
-  SyncStats(
     total_closed_rooms: Int,
     already_synced: Int,
     synced: Int,
@@ -83,24 +75,25 @@ pub fn sync_rooms_with_brain(
     }
     Ok(rooms) -> {
       let initial =
-        SyncStats(
+        SyncResult(
           total_closed_rooms: list.length(rooms),
           already_synced: 0,
           synced: 0,
           failed: 0,
         )
+      let synced_ids = sync_log.load_synced_ids(sync_log_path)
 
-      let final_stats =
-        list.fold(rooms, initial, fn(stats, room) {
-          sync_room(store, sync_log_path, brain_name, brain_client, stats, room)
-        })
-
-      SyncResult(
-        total_closed_rooms: final_stats.total_closed_rooms,
-        already_synced: final_stats.already_synced,
-        synced: final_stats.synced,
-        failed: final_stats.failed,
-      )
+      list.fold(rooms, initial, fn(stats, room) {
+        sync_room(
+          store,
+          sync_log_path,
+          brain_name,
+          brain_client,
+          synced_ids,
+          stats,
+          room,
+        )
+      })
     }
   }
 }
@@ -110,15 +103,16 @@ fn sync_room(
   sync_log_path: String,
   brain_name: String,
   brain_client: brain_persistence.BrainClient,
-  stats: SyncStats,
+  synced_ids: Set(String),
+  stats: SyncResult,
   room: sqlite.ClosedRoom,
-) -> SyncStats {
+) -> SyncResult {
   let sqlite.ClosedRoom(id: room_id, title: room_title, closed_at: closed_at) =
     room
 
-  case sync_log.is_synced(sync_log_path, room_id) {
+  case set.contains(synced_ids, room_id) {
     True ->
-      SyncStats(
+      SyncResult(
         total_closed_rooms: stats.total_closed_rooms,
         already_synced: stats.already_synced + 1,
         synced: stats.synced,
@@ -133,7 +127,7 @@ fn sync_room(
             <> ": "
             <> types.error_to_string(err),
           )
-          SyncStats(
+          SyncResult(
             total_closed_rooms: stats.total_closed_rooms,
             already_synced: stats.already_synced,
             synced: stats.synced,
@@ -159,7 +153,7 @@ fn sync_room(
                 <> " to brain: "
                 <> describe_brain_error(err),
               )
-              SyncStats(
+              SyncResult(
                 total_closed_rooms: stats.total_closed_rooms,
                 already_synced: stats.already_synced,
                 synced: stats.synced,
@@ -169,7 +163,7 @@ fn sync_room(
             Ok(_) ->
               case sync_log.mark_synced(sync_log_path, room_id, brain_name) {
                 Ok(Nil) ->
-                  SyncStats(
+                  SyncResult(
                     total_closed_rooms: stats.total_closed_rooms,
                     already_synced: stats.already_synced,
                     synced: stats.synced + 1,
@@ -182,7 +176,7 @@ fn sync_room(
                     <> " as synced: "
                     <> err,
                   )
-                  SyncStats(
+                  SyncResult(
                     total_closed_rooms: stats.total_closed_rooms,
                     already_synced: stats.already_synced,
                     synced: stats.synced,

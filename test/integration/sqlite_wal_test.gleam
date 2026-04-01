@@ -2,7 +2,6 @@ import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/int
 import gleam/list
-import gleam/string
 import gleeunit/should
 import neural_link/mcp/handlers
 import neural_link/mcp/tools
@@ -11,6 +10,7 @@ import neural_link/persistence/database
 import neural_link/persistence/sqlite
 import neural_link/runtime/supervisor
 import sqlight
+import support/http_helpers
 
 @external(erlang, "neural_link_http_test_ffi", "http_post")
 fn http_post(
@@ -18,42 +18,6 @@ fn http_post(
   body: String,
   headers: List(#(String, String)),
 ) -> Result(#(Int, String, List(#(String, String))), String)
-
-@external(erlang, "erlang", "unique_integer")
-fn erlang_unique_integer() -> Int
-
-fn erlang_abs(n: Int) -> Int {
-  case n < 0 {
-    True -> -n
-    False -> n
-  }
-}
-
-fn find_header(
-  headers: List(#(String, String)),
-  name: String,
-) -> Result(String, Nil) {
-  case headers {
-    [] -> Error(Nil)
-    [#(k, v), ..rest] ->
-      case string.lowercase(k) == string.lowercase(name) {
-        True -> Ok(v)
-        False -> find_header(rest, name)
-      }
-  }
-}
-
-fn extract_json_string(body: String, key: String) -> Result(String, String) {
-  let pattern = "\\\"" <> key <> "\\\":\\\""
-  case string.split(body, pattern) {
-    [_, rest, ..] ->
-      case string.split(rest, "\\\"") {
-        [value, ..] -> Ok(value)
-        _ -> Error("key not found")
-      }
-    _ -> Error("key not found")
-  }
-}
 
 fn retry_session_http(
   url: String,
@@ -81,7 +45,7 @@ fn make_session(url: String) -> String {
     "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"
   case retry_session_http(url, body, [], 5) {
     Ok(#(200, _, headers)) -> {
-      let assert Ok(sid) = find_header(headers, "mcp-session-id")
+      let assert Ok(sid) = http_helpers.find_header(headers, "mcp-session-id")
       sid
     }
     Ok(#(code, resp, _)) -> {
@@ -103,7 +67,7 @@ fn room_open(url: String, sid: String, title: String) -> Result(String, String) 
     <> "\",\"participant_id\":\"lead\",\"display_name\":\"Lead\"}}}"
 
   case http_post(url, body, h) {
-    Ok(#(200, resp, _)) -> extract_json_string(resp, "room_id")
+    Ok(#(200, resp, _)) -> http_helpers.extract_json_string(resp, "room_id")
     Ok(#(code, resp, _)) ->
       Error("room_open failed: " <> int.to_string(code) <> " " <> resp)
     Error(e) -> Error(e)
@@ -164,7 +128,7 @@ fn message_send(
     <> "}}"
 
   case http_post(url, body, h) {
-    Ok(#(200, resp, _)) -> extract_json_string(resp, "message_id")
+    Ok(#(200, resp, _)) -> http_helpers.extract_json_string(resp, "message_id")
     Ok(#(code, resp, _)) ->
       Error("message_send failed: " <> int.to_string(code) <> " " <> resp)
     Error(e) -> Error(e)
@@ -198,7 +162,10 @@ fn room_close(
 }
 
 pub fn full_room_lifecycle_sqlite_test() {
-  let port = 31_000 + erlang_abs(erlang_unique_integer()) % 1000
+  let port =
+    31_000
+    + http_helpers.erlang_abs(http_helpers.erlang_unique_integer())
+    % 1000
   let assert Ok(services) = supervisor.start_with_database(database.Memory)
 
   let handler =
@@ -223,7 +190,9 @@ pub fn full_room_lifecycle_sqlite_test() {
   let sid = make_session(url)
   let title =
     "SQLite Lifecycle Test "
-    <> int.to_string(erlang_abs(erlang_unique_integer()))
+    <> int.to_string(
+      http_helpers.erlang_abs(http_helpers.erlang_unique_integer()),
+    )
 
   let assert Ok(room_id) = room_open(url, sid, title)
   let assert Ok(Nil) = room_join(url, sid, room_id, "agent-a", "Agent A")

@@ -10,28 +10,8 @@ import neural_link/domain/interaction_mode
 import neural_link/domain/message
 import neural_link/domain/room
 import neural_link/persistence/sqlite
-import simplifile
 import sqlight
-
-fn cleanup(path: String) {
-  case simplifile.delete(file_or_dir_at: path) {
-    Ok(Nil) -> Nil
-    Error(_) -> Nil
-  }
-}
-
-fn test_db_path() -> String {
-  "/tmp/" <> id.generate("sqlite_store_test_") <> ".db"
-}
-
-fn with_store(f: fn(sqlite.SqliteStore) -> Nil) {
-  let path = test_db_path()
-  cleanup(path)
-  let assert Ok(store) = sqlite.open(path)
-  f(store)
-  sqlite.close(store)
-  cleanup(path)
-}
+import support/db_helpers
 
 fn make_room(room_id: String, title: String) -> room.Room {
   room.new_with_metadata(
@@ -69,7 +49,7 @@ fn make_message(
 }
 
 pub fn insert_room_test() {
-  with_store(fn(store) {
+  db_helpers.with_store("sqlite_store_test_", fn(store) {
     let room = make_room("room_insert", "Insert Room")
     let assert Ok(room_id) = sqlite.insert_room(store, room)
     room_id |> should.equal("room_insert")
@@ -108,7 +88,7 @@ pub fn insert_room_test() {
 }
 
 pub fn insert_participant_test() {
-  with_store(fn(store) {
+  db_helpers.with_store("sqlite_store_test_", fn(store) {
     let room = make_room("room_participant", "Participant Room")
     let assert Ok(_) = sqlite.insert_room(store, room)
 
@@ -146,7 +126,7 @@ pub fn insert_participant_test() {
 }
 
 pub fn insert_message_test() {
-  with_store(fn(store) {
+  db_helpers.with_store("sqlite_store_test_", fn(store) {
     let room = make_room("room_message", "Message Room")
     let assert Ok(_) = sqlite.insert_room(store, room)
 
@@ -201,12 +181,12 @@ pub fn insert_message_test() {
 }
 
 pub fn update_room_close_test() {
-  with_store(fn(store) {
+  db_helpers.with_store("sqlite_store_test_", fn(store) {
     let open_room = make_room("room_close", "Close Room")
     let assert Ok(_) = sqlite.insert_room(store, open_room)
 
     let closed_room = room.close_with_resolution(open_room, room.Completed)
-    let assert Ok(_) = sqlite.update_room_close(store, closed_room, 12, 3456)
+    let assert Ok(_) = sqlite.update_room_close(store, closed_room)
 
     let sqlite.SqliteStore(connection: conn) = store
     let decoder = {
@@ -232,7 +212,7 @@ pub fn update_room_close_test() {
 }
 
 pub fn insert_conversation_artifact_test() {
-  with_store(fn(store) {
+  db_helpers.with_store("sqlite_store_test_", fn(store) {
     let room = make_room("room_artifact", "Artifact Room")
     let assert Ok(_) = sqlite.insert_room(store, room)
 
@@ -267,7 +247,7 @@ pub fn insert_conversation_artifact_test() {
 }
 
 pub fn query_closed_rooms_test() {
-  with_store(fn(store) {
+  db_helpers.with_store("sqlite_store_test_", fn(store) {
     let open_room = make_room("room_open_only", "Open Room")
     let closed_room = make_room("room_closed", "Closed Room")
 
@@ -277,8 +257,6 @@ pub fn query_closed_rooms_test() {
       sqlite.update_room_close(
         store,
         room.close_with_resolution(closed_room, room.Failed),
-        1,
-        50,
       )
 
     let assert Ok(closed_rooms) = sqlite.query_closed_rooms(store)
@@ -292,7 +270,7 @@ pub fn query_closed_rooms_test() {
 }
 
 pub fn query_room_messages_test() {
-  with_store(fn(store) {
+  db_helpers.with_store("sqlite_store_test_", fn(store) {
     let room = make_room("room_query_messages", "Messages Room")
     let assert Ok(_) = sqlite.insert_room(store, room)
 

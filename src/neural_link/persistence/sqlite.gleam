@@ -160,7 +160,7 @@ pub fn list_tables(store: SqliteStore) -> Result(List(String), PersistenceError)
 }
 
 // ---------------------------------------------------------------------------
-// Primary write operations (stubs — implemented in Task 2)
+// Primary write operations
 // ---------------------------------------------------------------------------
 
 /// Persist a room to the primary store.
@@ -231,8 +231,6 @@ pub fn insert_participant(
 pub fn update_room_close(
   store: SqliteStore,
   room: Room,
-  _message_count: Int,
-  _duration_ms: Int,
 ) -> Result(Nil, PersistenceError) {
   let room_id = id.room_id_to_string(room.id)
   let resolution = case room.resolution {
