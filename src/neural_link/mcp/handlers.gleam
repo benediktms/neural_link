@@ -262,64 +262,99 @@ fn handle_room_open(
     registry_mod.AlreadyExisted(existing) ->
       Ok(encode_already_existed(existing))
     registry_mod.Created(room) -> {
-      // Fire-and-forget plugin notification per declared plugin
-      notify_plugins(room.plugins, resolve_plugin, fn(p) {
-        persistence_plugin.notify(p, persistence_plugin.RoomOpened(room))
-      })
-      let id.RoomId(room_id_str) = room.id
-      // Auto-join opener as Lead
-      let lead =
-        participant_domain.new(pid_str, display_name, participant_domain.Lead)
-      use room_subject <- result.try(registry_mod.get_room(
-        registry,
-        room_id_str,
-      ))
-      use _ <- result.try(room_mod.join(room_subject, lead))
+      // The registry confirmed no live actor with this id, but the persistent
+      // row may still exist from a prior process: insert_room is the
+      // cross-process arbiter. A UNIQUE/PRIMARY KEY violation means the id is
+      // already taken on disk — pivot to the AlreadyExisted response without
+      // auto-joining or inserting participant rows.
       case sqlite.insert_room(store, room) {
-        Ok(_) -> Nil
-        Error(e) ->
+        Ok(_) ->
+          finalize_created_room(
+            registry,
+            presence,
+            store,
+            room,
+            pid_str,
+            display_name,
+            resolve_plugin,
+          )
+        Error(persistence_types.UniqueViolation(_)) ->
+          Ok(encode_already_existed(room))
+        Error(other) -> {
+          // Degraded mode: persistence failed for a non-uniqueness reason.
+          // Keep the in-memory room available so coordination can proceed.
           logging.log(
             logging.Warning,
             "SQLite insert_room failed: "
-              <> persistence_types.error_to_string(e),
+              <> persistence_types.error_to_string(other),
           )
-      }
-      case
-        sqlite.insert_participant(
-          store,
-          room_id_str,
-          id.participant_id_to_string(lead.id),
-          lead.display_name,
-          "lead",
-          birl.to_iso8601(birl.utc_now()),
-        )
-      {
-        Ok(_) -> Nil
-        Error(e) ->
-          logging.log(
-            logging.Warning,
-            "SQLite insert_participant failed: "
-              <> persistence_types.error_to_string(e),
+          finalize_created_room(
+            registry,
+            presence,
+            store,
+            room,
+            pid_str,
+            display_name,
+            resolve_plugin,
           )
+        }
       }
-      presence_mod.register(
-        presence,
-        ParticipantId(pid_str),
-        room_id_str,
-        300_000,
-      )
-      Ok(
-        json.object([
-          #("room_id", json.string(room_id_str)),
-          #("title", json.string(room.title)),
-          #("status", json.string("open")),
-          #("participant_id", json.string(pid_str)),
-          #("role", json.string("lead")),
-          #("already_existed", json.bool(False)),
-        ]),
-      )
     }
   }
+}
+
+/// Finish setting up a freshly-created room: notify plugins, auto-join the
+/// opener as Lead, persist the lead participant, register presence, and emit
+/// the `Created`-shape response. Called after `insert_room` either succeeds or
+/// fails for a non-uniqueness reason (in which case we proceed in degraded
+/// mode rather than abandon the in-memory room).
+fn finalize_created_room(
+  registry: Subject(registry_mod.RegistryMessage),
+  presence: Subject(presence_mod.PresenceMessage),
+  store: sqlite.SqliteStore,
+  room: domain_room.Room,
+  pid_str: String,
+  display_name: String,
+  resolve_plugin: fn(PersistencePluginConfig) ->
+    Option(persistence_plugin.PersistencePlugin),
+) -> Result(json.Json, String) {
+  notify_plugins(room.plugins, resolve_plugin, fn(p) {
+    persistence_plugin.notify(p, persistence_plugin.RoomOpened(room))
+  })
+  let id.RoomId(room_id_str) = room.id
+  let lead =
+    participant_domain.new(pid_str, display_name, participant_domain.Lead)
+  use room_subject <- result.try(registry_mod.get_room(registry, room_id_str))
+  use _ <- result.try(room_mod.join(room_subject, lead))
+  case
+    sqlite.insert_participant(
+      store,
+      room_id_str,
+      id.participant_id_to_string(lead.id),
+      lead.display_name,
+      "lead",
+      birl.to_iso8601(birl.utc_now()),
+    )
+  {
+    Ok(_) -> Nil
+    Error(e) ->
+      logging.log(
+        logging.Warning,
+        "SQLite insert_participant failed: "
+          <> persistence_types.error_to_string(e),
+      )
+  }
+  presence_mod.register(presence, ParticipantId(pid_str), room_id_str, 300_000)
+  Ok(
+    json.object([
+      #("room_id", json.string(room_id_str)),
+      #("title", json.string(room.title)),
+      #("status", json.string("open")),
+      #("participant_id", json.string(pid_str)),
+      #("role", json.string("lead")),
+      #("already_existed", json.bool(False)),
+    ]),
+  )
 }
 
 /// Validate the optional caller-supplied room id. `None` passes through; a
@@ -346,10 +381,15 @@ fn format_id_error(err: IdError) -> String {
 
 fn encode_already_existed(room: domain_room.Room) -> json.Json {
   let id.RoomId(room_id_str) = room.id
+  // Schema mirrors the Created path: same keys, but participant_id/role are
+  // null because this caller was NOT auto-joined — they must `room_join`
+  // separately to participate. Keeps response decoding uniform across paths.
   json.object([
     #("room_id", json.string(room_id_str)),
     #("title", json.string(room.title)),
     #("status", json.string(room_status_to_string(room.status))),
+    #("participant_id", json.null()),
+    #("role", json.null()),
     #("already_existed", json.bool(True)),
   ])
 }

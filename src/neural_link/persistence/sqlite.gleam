@@ -6,7 +6,9 @@ import neural_link/domain/id
 import neural_link/domain/interaction_mode
 import neural_link/domain/message.{type Message}
 import neural_link/domain/room.{type Room}
-import neural_link/persistence/types.{type PersistenceError, AdapterError}
+import neural_link/persistence/types.{
+  type PersistenceError, AdapterError, UniqueViolation,
+}
 import sqlight
 
 // ---------------------------------------------------------------------------
@@ -139,6 +141,27 @@ fn bootstrap_schema(conn: sqlight.Connection) -> Result(Nil, PersistenceError) {
 // ---------------------------------------------------------------------------
 // Schema introspection (for testing)
 // ---------------------------------------------------------------------------
+
+/// Count rows in the `rooms` table. Used by tests to assert that rejected
+/// `room_open` calls leave the database untouched.
+pub fn count_rooms(store: SqliteStore) -> Result(Int, PersistenceError) {
+  case
+    sqlight.query(
+      "SELECT COUNT(*) FROM rooms",
+      on: store.connection,
+      with: [],
+      expecting: decode.at([0], decode.int),
+    )
+  {
+    Ok([n, ..]) -> Ok(n)
+    Ok([]) -> Ok(0)
+    Error(err) ->
+      Error(AdapterError(
+        backend: "sqlite",
+        detail: "count_rooms failed: " <> err.message,
+      ))
+  }
+}
 
 /// List all table names in the database. Used by tests to verify schema bootstrap.
 pub fn list_tables(
@@ -379,6 +402,10 @@ pub fn query_room_messages(
 }
 
 fn map_sqlite_error(prefix: String, err: sqlight.Error) -> PersistenceError {
-  let sqlight.SqlightError(_, message, _) = err
-  AdapterError(backend: "sqlite", detail: prefix <> message)
+  let sqlight.SqlightError(code, message, _) = err
+  case code {
+    sqlight.ConstraintUnique | sqlight.ConstraintPrimarykey ->
+      UniqueViolation(prefix <> message)
+    _ -> AdapterError(backend: "sqlite", detail: prefix <> message)
+  }
 }
