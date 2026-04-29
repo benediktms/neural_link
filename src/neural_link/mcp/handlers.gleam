@@ -10,8 +10,8 @@ import gleam/result
 import gleam/string
 import logging
 import neural_link/domain/id.{
-  MessageId, ParticipantId, ThreadId, message_id_to_string,
-  participant_id_to_string,
+  type IdError, InvalidFormat, MessageId, ParticipantId, ThreadId,
+  message_id_to_string, participant_id_to_string,
 }
 import neural_link/domain/interaction_mode
 import neural_link/domain/message
@@ -245,7 +245,10 @@ fn handle_room_open(
         Error(_) -> None
       }
     })
-  use room <- result.try(registry_mod.create_room(
+  use validated_id <- result.try(
+    parse_supplied_room_id(get_optional_string_param(params, "id")),
+  )
+  use create_result <- result.try(registry_mod.create_room_with_id(
     registry,
     title,
     purpose,
@@ -253,53 +256,111 @@ fn handle_room_open(
     tags,
     plugins,
     mode,
+    validated_id,
   ))
-  // Fire-and-forget plugin notification per declared plugin
-  notify_plugins(room.plugins, resolve_plugin, fn(p) {
-    persistence_plugin.notify(p, persistence_plugin.RoomOpened(room))
-  })
+  case create_result {
+    registry_mod.AlreadyExisted(existing) ->
+      Ok(encode_already_existed(existing))
+    registry_mod.Created(room) -> {
+      // Fire-and-forget plugin notification per declared plugin
+      notify_plugins(room.plugins, resolve_plugin, fn(p) {
+        persistence_plugin.notify(p, persistence_plugin.RoomOpened(room))
+      })
+      let id.RoomId(room_id_str) = room.id
+      // Auto-join opener as Lead
+      let lead =
+        participant_domain.new(pid_str, display_name, participant_domain.Lead)
+      use room_subject <- result.try(registry_mod.get_room(
+        registry,
+        room_id_str,
+      ))
+      use _ <- result.try(room_mod.join(room_subject, lead))
+      case sqlite.insert_room(store, room) {
+        Ok(_) -> Nil
+        Error(e) ->
+          logging.log(
+            logging.Warning,
+            "SQLite insert_room failed: "
+              <> persistence_types.error_to_string(e),
+          )
+      }
+      case
+        sqlite.insert_participant(
+          store,
+          room_id_str,
+          id.participant_id_to_string(lead.id),
+          lead.display_name,
+          "lead",
+          birl.to_iso8601(birl.utc_now()),
+        )
+      {
+        Ok(_) -> Nil
+        Error(e) ->
+          logging.log(
+            logging.Warning,
+            "SQLite insert_participant failed: "
+              <> persistence_types.error_to_string(e),
+          )
+      }
+      presence_mod.register(
+        presence,
+        ParticipantId(pid_str),
+        room_id_str,
+        300_000,
+      )
+      Ok(
+        json.object([
+          #("room_id", json.string(room_id_str)),
+          #("title", json.string(room.title)),
+          #("status", json.string("open")),
+          #("participant_id", json.string(pid_str)),
+          #("role", json.string("lead")),
+          #("already_existed", json.bool(False)),
+        ]),
+      )
+    }
+  }
+}
+
+/// Validate the optional caller-supplied room id. `None` passes through; a
+/// `Some(s)` that fails the format check becomes a protocol error so we never
+/// reach the registry or DB with a malformed id.
+fn parse_supplied_room_id(
+  raw: Option(String),
+) -> Result(Option(String), String) {
+  case raw {
+    None -> Ok(None)
+    Some(s) ->
+      case id.room_id_from_string(s) {
+        Ok(_) -> Ok(Some(s))
+        Error(err) -> Error(format_id_error(err))
+      }
+  }
+}
+
+fn format_id_error(err: IdError) -> String {
+  case err {
+    InvalidFormat(detail) -> "invalid id: " <> detail
+  }
+}
+
+fn encode_already_existed(room: domain_room.Room) -> json.Json {
   let id.RoomId(room_id_str) = room.id
-  // Auto-join opener as Lead
-  let lead =
-    participant_domain.new(pid_str, display_name, participant_domain.Lead)
-  use room_subject <- result.try(registry_mod.get_room(registry, room_id_str))
-  use _ <- result.try(room_mod.join(room_subject, lead))
-  case sqlite.insert_room(store, room) {
-    Ok(_) -> Nil
-    Error(e) ->
-      logging.log(
-        logging.Warning,
-        "SQLite insert_room failed: " <> persistence_types.error_to_string(e),
-      )
+  json.object([
+    #("room_id", json.string(room_id_str)),
+    #("title", json.string(room.title)),
+    #("status", json.string(room_status_to_string(room.status))),
+    #("already_existed", json.bool(True)),
+  ])
+}
+
+fn room_status_to_string(status: domain_room.RoomStatus) -> String {
+  case status {
+    domain_room.Open -> "open"
+    domain_room.Active -> "active"
+    domain_room.Closing -> "closing"
+    domain_room.Closed -> "closed"
   }
-  case
-    sqlite.insert_participant(
-      store,
-      room_id_str,
-      id.participant_id_to_string(lead.id),
-      lead.display_name,
-      "lead",
-      birl.to_iso8601(birl.utc_now()),
-    )
-  {
-    Ok(_) -> Nil
-    Error(e) ->
-      logging.log(
-        logging.Warning,
-        "SQLite insert_participant failed: "
-          <> persistence_types.error_to_string(e),
-      )
-  }
-  presence_mod.register(presence, ParticipantId(pid_str), room_id_str, 300_000)
-  Ok(
-    json.object([
-      #("room_id", json.string(room_id_str)),
-      #("title", json.string(room.title)),
-      #("status", json.string("open")),
-      #("participant_id", json.string(pid_str)),
-      #("role", json.string("lead")),
-    ]),
-  )
 }
 
 // ---------------------------------------------------------------------------

@@ -48,3 +48,59 @@ pub fn message_id_round_trip_test() {
   let mid = id.MessageId(raw)
   id.message_id_to_string(mid) |> should.equal(raw)
 }
+
+// ---------------------------------------------------------------------------
+// room_id_from_string validator
+// ---------------------------------------------------------------------------
+
+pub fn room_id_from_string_accepts_auto_generated_shape_test() {
+  // The validator must accept exactly what `new_room_id` produces.
+  let generated = id.room_id_to_string(id.new_room_id())
+  let assert Ok(rid) = id.room_id_from_string(generated)
+  id.room_id_to_string(rid) |> should.equal(generated)
+}
+
+pub fn room_id_from_string_accepts_canonical_format_test() {
+  let assert Ok(rid) = id.room_id_from_string("room_a1b2c3d4e5f60718")
+  id.room_id_to_string(rid) |> should.equal("room_a1b2c3d4e5f60718")
+}
+
+pub fn room_id_from_string_rejects_short_suffix_test() {
+  // 15 hex chars instead of 16
+  let assert Error(id.InvalidFormat(_)) =
+    id.room_id_from_string("room_a1b2c3d4e5f6071")
+}
+
+pub fn room_id_from_string_rejects_long_suffix_test() {
+  // 17 hex chars instead of 16
+  let assert Error(id.InvalidFormat(_)) =
+    id.room_id_from_string("room_a1b2c3d4e5f607189")
+}
+
+pub fn room_id_from_string_rejects_uppercase_hex_test() {
+  let assert Error(id.InvalidFormat(_)) =
+    id.room_id_from_string("room_ABCDEF0123456789")
+}
+
+pub fn room_id_from_string_rejects_non_hex_chars_test() {
+  // 'g' is not a hex char
+  let assert Error(id.InvalidFormat(_)) =
+    id.room_id_from_string("room_xyz1234567890abc")
+}
+
+pub fn room_id_from_string_rejects_missing_prefix_test() {
+  let assert Error(id.InvalidFormat(_)) =
+    id.room_id_from_string("a1b2c3d4e5f60718")
+}
+
+pub fn room_id_from_string_rejects_wrong_prefix_test() {
+  let assert Error(id.InvalidFormat(_)) = id.room_id_from_string("not-a-room")
+}
+
+pub fn room_id_from_string_rejects_empty_test() {
+  let assert Error(id.InvalidFormat(_)) = id.room_id_from_string("")
+}
+
+pub fn room_id_from_string_rejects_prefix_only_test() {
+  let assert Error(id.InvalidFormat(_)) = id.room_id_from_string("room_")
+}

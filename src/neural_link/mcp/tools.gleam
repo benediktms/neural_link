@@ -17,13 +17,19 @@ pub fn all_tools() -> List(protocol.ToolDefinition) {
 fn room_open() -> protocol.ToolDefinition {
   ToolDefinition(
     name: "room_open",
-    description: "Create a new coordination room. The opener is auto-joined as the room's lead.",
+    description: "Create a new coordination room. The opener is auto-joined as the room's lead. If `id` is supplied and a room with that id already exists, returns `already_existed: true` and the existing room is left untouched (no new participants added) — caller must `room_join` separately to participate.",
     properties: [
       ToolProperty(
         name: "title",
         prop_type: "string",
         description: "Room title",
         required: True,
+      ),
+      ToolProperty(
+        name: "id",
+        prop_type: "string",
+        description: "Optional caller-supplied room id. Must match `^room_[a-f0-9]{16}$` (literal `room_` prefix + 16 lowercase hex chars). Lets a caller pick a deterministic id derived from its own logical key (e.g. a run id) so multiple processes can converge on the same room without a registration round-trip. If omitted, neural_link generates a fresh id.",
+        required: False,
       ),
       ToolProperty(
         name: "participant_id",

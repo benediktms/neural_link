@@ -1,5 +1,6 @@
 import gleam/erlang/process
 import gleam/int
+import gleam/list
 import gleam/string
 import gleeunit/should
 import neural_link/mcp/handlers
@@ -515,6 +516,100 @@ pub fn http_inbox_count_tracks_pending_messages_test() {
   // Check count after ack — should be back to 0
   let assert Ok(#(200, count_resp_2, _)) = http_get(count_url, [])
   string.contains(count_resp_2, "\"total\":0") |> should.be_true
+}
+
+// ---------------------------------------------------------------------------
+// nlr-a91: deterministic caller-supplied room ids
+// ---------------------------------------------------------------------------
+
+pub fn http_room_open_supplied_id_first_caller_test() {
+  let port = start_test_server()
+  let url = "http://localhost:" <> int.to_string(port) <> "/mcp"
+  let assert Ok(#(200, _, init_headers)) =
+    http_post(
+      url,
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+      [],
+    )
+  let assert Ok(sid) = http_helpers.find_header(init_headers, "mcp-session-id")
+  let h = [#("mcp-session-id", sid)]
+
+  let supplied = "room_a1b2c3d4e5f60718"
+  let body =
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Deterministic\",\"participant_id\":\"lead\",\"display_name\":\"Lead\",\"id\":\""
+    <> supplied
+    <> "\"}}}"
+  let assert Ok(#(200, resp, _)) = http_post(url, body, h)
+
+  // Returned id is verbatim, and already_existed is false on the first call.
+  let assert Ok(returned_id) = http_helpers.extract_json_string(resp, "room_id")
+  returned_id |> should.equal(supplied)
+  string.contains(resp, "\\\"already_existed\\\":false") |> should.be_true
+}
+
+pub fn http_room_open_supplied_id_second_caller_is_idempotent_test() {
+  let port = start_test_server()
+  let url = "http://localhost:" <> int.to_string(port) <> "/mcp"
+  let assert Ok(#(200, _, init_headers)) =
+    http_post(
+      url,
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+      [],
+    )
+  let assert Ok(sid) = http_helpers.find_header(init_headers, "mcp-session-id")
+  let h = [#("mcp-session-id", sid)]
+
+  let supplied = "room_0123456789abcdef"
+  let first =
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"First\",\"participant_id\":\"lead\",\"display_name\":\"Lead\",\"id\":\""
+    <> supplied
+    <> "\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(url, first, h)
+
+  // Second caller arrives with the same id — must NOT error, must return
+  // already_existed: true and the original title.
+  let second =
+    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Second Caller\",\"participant_id\":\"interloper\",\"display_name\":\"Interloper\",\"id\":\""
+    <> supplied
+    <> "\"}}}"
+  let assert Ok(#(200, resp, _)) = http_post(url, second, h)
+
+  let assert Ok(returned_id) = http_helpers.extract_json_string(resp, "room_id")
+  returned_id |> should.equal(supplied)
+  string.contains(resp, "\\\"already_existed\\\":true") |> should.be_true
+  // Title remains the first caller's title — the room was not recreated.
+  string.contains(resp, "\\\"First\\\"") |> should.be_true
+  string.contains(resp, "Second Caller") |> should.be_false
+}
+
+pub fn http_room_open_invalid_id_is_rejected_test() {
+  let port = start_test_server()
+  let url = "http://localhost:" <> int.to_string(port) <> "/mcp"
+  let assert Ok(#(200, _, init_headers)) =
+    http_post(
+      url,
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+      [],
+    )
+  let assert Ok(sid) = http_helpers.find_header(init_headers, "mcp-session-id")
+  let h = [#("mcp-session-id", sid)]
+
+  // Each of these should produce a tool-call error and never insert a room.
+  let bad_ids = [
+    "room_xyz", "", "room_a1b2c3d4e5f607189", "not-a-room",
+    "room_ABCDEF0123456789",
+  ]
+  list.each(bad_ids, fn(bad) {
+    let body =
+      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Bad Id\",\"participant_id\":\"lead\",\"display_name\":\"Lead\",\"id\":\""
+      <> bad
+      <> "\"}}}"
+    let assert Ok(#(200, resp, _)) = http_post(url, body, h)
+    // Tool-level error surfaces in the JSON-RPC payload — no room_id, contains
+    // the format hint.
+    string.contains(resp, "invalid id") |> should.be_true
+    string.contains(resp, "room_[a-f0-9]{16}") |> should.be_true
+  })
 }
 
 // ---------------------------------------------------------------------------
