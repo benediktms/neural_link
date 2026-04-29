@@ -486,7 +486,10 @@ fn handle_message(
 
 /// Check outbound obligations: messages sent by this participant that have
 /// any pending (unacked) receipts from other participants.
-fn check_outbound_obligations(state: RoomState, pid_str: String) -> List(String) {
+fn check_outbound_obligations(
+  state: RoomState,
+  pid_str: String,
+) -> List(String) {
   check_outbound_obligations_with_receipts(
     state.receipts,
     state.messages,

@@ -13,7 +13,10 @@ pub fn erlang_abs(n: Int) -> Int {
 /// Extract a string value from an MCP tool response by key.
 /// MCP wraps tool output in a content block with escaped JSON, so we search
 /// for the escaped pattern: \"key\":\"value\"
-pub fn extract_json_string(body: String, key: String) -> Result(String, String) {
+pub fn extract_json_string(
+  body: String,
+  key: String,
+) -> Result(String, String) {
   let pattern = "\\\"" <> key <> "\\\":\\\""
   case string.split(body, pattern) {
     [_, rest, ..] ->

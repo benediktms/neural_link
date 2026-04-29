@@ -141,7 +141,9 @@ fn bootstrap_schema(conn: sqlight.Connection) -> Result(Nil, PersistenceError) {
 // ---------------------------------------------------------------------------
 
 /// List all table names in the database. Used by tests to verify schema bootstrap.
-pub fn list_tables(store: SqliteStore) -> Result(List(String), PersistenceError) {
+pub fn list_tables(
+  store: SqliteStore,
+) -> Result(List(String), PersistenceError) {
   case
     sqlight.query(
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",

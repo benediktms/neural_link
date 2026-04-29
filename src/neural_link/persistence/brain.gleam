@@ -25,8 +25,7 @@ pub type BrainClient {
       String,
       String,
       List(String),
-    ) ->
-      brain_types.BrainResult(String),
+    ) -> brain_types.BrainResult(String),
   )
 }
 

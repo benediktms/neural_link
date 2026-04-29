@@ -8,7 +8,9 @@ import neural_link/mcp/protocol.{
 }
 
 /// Decode a JSON-RPC request from a JSON string
-pub fn decode_request(input: String) -> Result(JsonRpcRequest, json.DecodeError) {
+pub fn decode_request(
+  input: String,
+) -> Result(JsonRpcRequest, json.DecodeError) {
   json.parse(from: input, using: request_decoder())
 }
 

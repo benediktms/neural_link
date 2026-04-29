@@ -59,7 +59,11 @@ fn make_session(url: String) -> String {
   }
 }
 
-fn room_open(url: String, sid: String, title: String) -> Result(String, String) {
+fn room_open(
+  url: String,
+  sid: String,
+  title: String,
+) -> Result(String, String) {
   let h = [#("mcp-session-id", sid)]
   let body =
     "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\""
