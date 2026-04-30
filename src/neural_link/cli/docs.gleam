@@ -279,8 +279,13 @@ fn generate_tools_doc() -> String {
   let tools = [
     #(
       "room_open",
-      "Create a coordination room. The opener is auto-joined as the room's lead. The `brains` param configures persistence plugins. If `id` is supplied and a room with that id already exists (in-memory or persisted), returns `already_existed: true` with `participant_id`/`role` set to null — the caller must `room_join` separately. Response always includes `already_existed: boolean`",
-      "title (required), participant_id (required), display_name (required), id (optional, format: `room_<16 lowercase hex>`, lets a caller pick a deterministic id derived from its own logical key), purpose, external_ref, tags, brains, interaction_mode",
+      "Create a coordination room. The opener is auto-joined as the room's lead. The server always assigns a fresh random room id. The `brains` param configures persistence plugins. For cross-process reconnect, set `external_ref` and look up later via `room_find_by_external_ref`",
+      "title (required), participant_id (required), display_name (required), purpose, external_ref, tags, brains, interaction_mode",
+    ),
+    #(
+      "room_find_by_external_ref",
+      "Look up rooms by the `external_ref` they were opened with. Returns matching rooms with their status (open, closed, stale). Use to re-attach across process restarts: the replacement supplies the same external_ref and discovers the prior room id",
+      "external_ref (required)",
     ),
     #(
       "room_join",

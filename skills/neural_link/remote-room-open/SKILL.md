@@ -56,10 +56,10 @@ later).
 - The `room_id` returned is what teammates use to join. Share it
   through whatever channel you'd share a link in (Slack, etc.) — there
   is no auto-discovery.
-- If the room title or purpose suggests a deterministic id is wanted
-  (e.g. "the daily-standup room"), the user can supply
-  `--id nlr-<16-hex-chars>` and the same room can be re-opened later
-  with the same id (the server returns `already_existed: true` on
-  re-open).
 - The opener is automatically joined as the room lead. No extra
   `room_join` is needed for them.
+- For cross-process reconnect (e.g. a process dies and a replacement
+  needs to find the same room), set `external_ref` at open time —
+  e.g. `external_ref: "workflow-xyz"`. A later process can call
+  `room_find_by_external_ref` with the same string to discover the
+  room id.

@@ -11,25 +11,20 @@ pub fn all_tools() -> List(protocol.ToolDefinition) {
     wait_for(),
     thread_summarize(),
     room_close(),
+    room_find_by_external_ref(),
   ]
 }
 
 fn room_open() -> protocol.ToolDefinition {
   ToolDefinition(
     name: "room_open",
-    description: "Create a new coordination room. The opener is auto-joined as the room's lead. If `id` is supplied and a room with that id already exists, returns `already_existed: true` and the existing room is left untouched (no new participants added) — caller must `room_join` separately to participate.",
+    description: "Create a new coordination room. The opener is auto-joined as the room's lead. The server always assigns a fresh random room id. To re-attach to an existing room across processes, set `external_ref` at open time and look the room up later via `room_find_by_external_ref`.",
     properties: [
       ToolProperty(
         name: "title",
         prop_type: "string",
         description: "Room title",
         required: True,
-      ),
-      ToolProperty(
-        name: "id",
-        prop_type: "string",
-        description: "Optional caller-supplied room id. Must match `^room_[a-f0-9]{16}$` (literal `room_` prefix + 16 lowercase hex chars). Lets a caller pick a deterministic id derived from its own logical key (e.g. a run id) so multiple processes can converge on the same room without a registration round-trip. If omitted, neural_link generates a fresh id.",
-        required: False,
       ),
       ToolProperty(
         name: "participant_id",
@@ -329,6 +324,21 @@ fn room_close() -> protocol.ToolDefinition {
         name: "resolution",
         prop_type: "string",
         description: "Close resolution: completed, cancelled, superseded, or failed",
+        required: True,
+      ),
+    ],
+  )
+}
+
+fn room_find_by_external_ref() -> protocol.ToolDefinition {
+  ToolDefinition(
+    name: "room_find_by_external_ref",
+    description: "Look up rooms by the `external_ref` they were opened with. Use to re-attach across process restarts: when a client dies and a replacement starts, the replacement supplies the same external_ref and discovers the prior room's id. Returns matching rooms with their status (open or closed). Does not create rooms; use room_open then room_join to (re)attach.",
+    properties: [
+      ToolProperty(
+        name: "external_ref",
+        prop_type: "string",
+        description: "External reference set at room_open time (e.g. a workflow id, run id, ticket key)",
         required: True,
       ),
     ],

@@ -10,8 +10,8 @@ import gleam/result
 import gleam/string
 import logging
 import neural_link/domain/id.{
-  type IdError, InvalidFormat, MessageId, ParticipantId, ThreadId,
-  message_id_to_string, participant_id_to_string,
+  MessageId, ParticipantId, ThreadId, message_id_to_string,
+  participant_id_to_string,
 }
 import neural_link/domain/interaction_mode
 import neural_link/domain/message
@@ -94,6 +94,8 @@ fn do_make_handler(
       "thread_summarize" -> handle_thread_summarize(registry, arguments)
       "room_close" ->
         handle_room_close(registry, presence, store, arguments, resolve_plugin)
+      "room_find_by_external_ref" ->
+        handle_room_find_by_external_ref(registry, store, arguments)
       _ -> Error("Unknown tool: " <> tool_name)
     }
   }
@@ -245,10 +247,7 @@ fn handle_room_open(
         Error(_) -> None
       }
     })
-  use validated_id <- result.try(
-    parse_supplied_room_id(get_optional_string_param(params, "id")),
-  )
-  use create_result <- result.try(registry_mod.create_room_with_id(
+  use room <- result.try(registry_mod.create_room(
     registry,
     title,
     purpose,
@@ -256,51 +255,27 @@ fn handle_room_open(
     tags,
     plugins,
     mode,
-    validated_id,
   ))
-  case create_result {
-    registry_mod.AlreadyExisted(existing) ->
-      Ok(encode_already_existed(existing))
-    registry_mod.Created(room) -> {
-      // The registry confirmed no live actor with this id, but the persistent
-      // row may still exist from a prior process: insert_room is the
-      // cross-process arbiter. A UNIQUE/PRIMARY KEY violation means the id is
-      // already taken on disk — pivot to the AlreadyExisted response without
-      // auto-joining or inserting participant rows.
-      case sqlite.insert_room(store, room) {
-        Ok(_) ->
-          finalize_created_room(
-            registry,
-            presence,
-            store,
-            room,
-            pid_str,
-            display_name,
-            resolve_plugin,
-          )
-        Error(persistence_types.UniqueViolation(_)) ->
-          Ok(encode_already_existed(room))
-        Error(other) -> {
-          // Degraded mode: persistence failed for a non-uniqueness reason.
-          // Keep the in-memory room available so coordination can proceed.
-          logging.log(
-            logging.Warning,
-            "SQLite insert_room failed: "
-              <> persistence_types.error_to_string(other),
-          )
-          finalize_created_room(
-            registry,
-            presence,
-            store,
-            room,
-            pid_str,
-            display_name,
-            resolve_plugin,
-          )
-        }
-      }
-    }
+  // Persist the room. SQLite errors are logged and the in-memory room is kept
+  // so coordination can proceed in degraded mode — the actor is the source of
+  // truth at runtime; SQLite is replicated state.
+  case sqlite.insert_room(store, room) {
+    Ok(_) -> Nil
+    Error(err) ->
+      logging.log(
+        logging.Warning,
+        "SQLite insert_room failed: " <> persistence_types.error_to_string(err),
+      )
   }
+  finalize_created_room(
+    registry,
+    presence,
+    store,
+    room,
+    pid_str,
+    display_name,
+    resolve_plugin,
+  )
 }
 
 /// Finish setting up a freshly-created room: notify plugins, auto-join the
@@ -352,55 +327,8 @@ fn finalize_created_room(
       #("status", json.string("open")),
       #("participant_id", json.string(pid_str)),
       #("role", json.string("lead")),
-      #("already_existed", json.bool(False)),
     ]),
   )
-}
-
-/// Validate the optional caller-supplied room id. `None` passes through; a
-/// `Some(s)` that fails the format check becomes a protocol error so we never
-/// reach the registry or DB with a malformed id.
-fn parse_supplied_room_id(
-  raw: Option(String),
-) -> Result(Option(String), String) {
-  case raw {
-    None -> Ok(None)
-    Some(s) ->
-      case id.room_id_from_string(s) {
-        Ok(_) -> Ok(Some(s))
-        Error(err) -> Error(format_id_error(err))
-      }
-  }
-}
-
-fn format_id_error(err: IdError) -> String {
-  case err {
-    InvalidFormat(detail) -> "invalid id: " <> detail
-  }
-}
-
-fn encode_already_existed(room: domain_room.Room) -> json.Json {
-  let id.RoomId(room_id_str) = room.id
-  // Schema mirrors the Created path: same keys, but participant_id/role are
-  // null because this caller was NOT auto-joined — they must `room_join`
-  // separately to participate. Keeps response decoding uniform across paths.
-  json.object([
-    #("room_id", json.string(room_id_str)),
-    #("title", json.string(room.title)),
-    #("status", json.string(room_status_to_string(room.status))),
-    #("participant_id", json.null()),
-    #("role", json.null()),
-    #("already_existed", json.bool(True)),
-  ])
-}
-
-fn room_status_to_string(status: domain_room.RoomStatus) -> String {
-  case status {
-    domain_room.Open -> "open"
-    domain_room.Active -> "active"
-    domain_room.Closing -> "closing"
-    domain_room.Closed -> "closed"
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -982,6 +910,54 @@ fn extraction_fields(
     #("unresolved_blockers", json.array(conv.unresolved_blockers, json.string)),
     #("artifact_record_id", artifact),
   ]
+}
+
+// ---------------------------------------------------------------------------
+// room_find_by_external_ref handler
+// ---------------------------------------------------------------------------
+
+fn handle_room_find_by_external_ref(
+  registry: Subject(registry_mod.RegistryMessage),
+  store: sqlite.SqliteStore,
+  arguments: Option(Dynamic),
+) -> Result(json.Json, String) {
+  use params <- result.try(require_params(arguments))
+  use external_ref <- result.try(get_string_param(params, "external_ref"))
+
+  case sqlite.query_rooms_by_external_ref(store, external_ref) {
+    Error(err) ->
+      Error("Lookup failed: " <> persistence_types.error_to_string(err))
+    Ok(rows) -> {
+      let entries =
+        list.map(rows, fn(r) {
+          let live = case registry_mod.get_room(registry, r.id) {
+            Ok(_) -> True
+            Error(_) -> False
+          }
+          let status = case r.resolution, live {
+            Some(resolution), _ -> resolution
+            None, True -> "open"
+            None, False -> "stale"
+          }
+          json.object([
+            #("room_id", json.string(r.id)),
+            #("title", json.string(r.title)),
+            #("status", json.string(status)),
+            #("live", json.bool(live)),
+            #("closed_at", case r.closed_at {
+              Some(s) -> json.string(s)
+              None -> json.null()
+            }),
+          ])
+        })
+      Ok(
+        json.object([
+          #("external_ref", json.string(external_ref)),
+          #("rooms", json.preprocessed_array(entries)),
+        ]),
+      )
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

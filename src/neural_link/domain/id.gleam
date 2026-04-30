@@ -1,6 +1,5 @@
 import gleam/bit_array
 import gleam/crypto
-import gleam/list
 import gleam/string
 
 /// All domain ID types — every domain module imports from here
@@ -59,43 +58,6 @@ pub fn new_summary_id() -> SummaryId {
 
 pub fn new_wait_id() -> WaitId {
   WaitId(generate("wait_"))
-}
-
-/// Errors returned by ID parsers/validators.
-pub type IdError {
-  InvalidFormat(detail: String)
-}
-
-/// Parse a string as a `RoomId`, validating it matches the same shape that
-/// `new_room_id` produces: `room_` prefix followed by exactly 16 lowercase
-/// hex characters (21 chars total). This is the canonical format check —
-/// callers MUST use it to reject malformed caller-supplied ids before they
-/// reach the registry or persistence layer.
-pub fn room_id_from_string(s: String) -> Result(RoomId, IdError) {
-  case is_valid_room_id_format(s) {
-    True -> Ok(RoomId(s))
-    False ->
-      Error(InvalidFormat("room_id must match ^room_[a-f0-9]{16}$, got: " <> s))
-  }
-}
-
-fn is_valid_room_id_format(s: String) -> Bool {
-  case string.starts_with(s, "room_") {
-    False -> False
-    True -> {
-      let suffix = string.drop_start(s, 5)
-      string.length(suffix) == 16
-      && list.all(string.to_graphemes(suffix), is_lowercase_hex_char)
-    }
-  }
-}
-
-fn is_lowercase_hex_char(c: String) -> Bool {
-  case c {
-    "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" -> True
-    "a" | "b" | "c" | "d" | "e" | "f" -> True
-    _ -> False
-  }
 }
 
 /// Extract the raw string from any ID type

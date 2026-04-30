@@ -375,6 +375,44 @@ pub fn query_closed_rooms(
   }
 }
 
+pub type RoomLookup {
+  RoomLookup(
+    id: String,
+    title: String,
+    resolution: Option(String),
+    closed_at: Option(String),
+  )
+}
+
+/// Find rooms (active or closed) that were opened with the given
+/// `external_ref`. Returns rows ordered most-recently-created first so the
+/// caller can pick the freshest match.
+pub fn query_rooms_by_external_ref(
+  store: SqliteStore,
+  external_ref: String,
+) -> Result(List(RoomLookup), PersistenceError) {
+  let decoder = {
+    use id <- decode.field(0, decode.string)
+    use title <- decode.field(1, decode.string)
+    use resolution <- decode.field(2, decode.optional(decode.string))
+    use closed_at <- decode.field(3, decode.optional(decode.string))
+    decode.success(RoomLookup(id:, title:, resolution:, closed_at:))
+  }
+
+  case
+    sqlight.query(
+      "SELECT id, title, resolution, closed_at FROM rooms WHERE external_ref = ? ORDER BY created_at DESC",
+      on: store.connection,
+      with: [sqlight.text(external_ref)],
+      expecting: decoder,
+    )
+  {
+    Ok(rows) -> Ok(rows)
+    Error(err) ->
+      Error(map_sqlite_error("query_rooms_by_external_ref failed: ", err))
+  }
+}
+
 pub fn query_room_messages(
   store: SqliteStore,
   room_id: String,

@@ -223,7 +223,7 @@ the headline workflow.
 
 - Single-node runtime only; distributed rooms are not implemented
 - Auth is a single shared bearer token per server — no per-user identity, no ACLs
-- No workspace / multi-tenant namespacing; teams sharing a server should use distinct deterministic room ids to avoid collisions
+- Room IDs are always server-generated; for cross-process reconnect, set `external_ref` at open time and look up via `room_find_by_external_ref`
 - No message editing or encryption
 - `thread_summarize` is extractive, not LLM-generated
 - `wait_for` timeout handling is enforced at the MCP layer, not inside the room actor

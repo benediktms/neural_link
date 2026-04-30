@@ -173,13 +173,24 @@ to call `mcp__neural_link__*` (the local server name) when you want
 
 ---
 
+## Cross-process reconnect
+
+Room IDs are server-generated and globally unique by construction.
+There is no client-supplied deterministic-id mode (it was removed —
+see commit history). For the use case "a process died and a
+replacement needs to find the same room," use `external_ref`:
+
+1. The original opener sets `external_ref: "<some-stable-key>"` on
+   `room_open` (e.g. a workflow id).
+2. The replacement process calls `room_find_by_external_ref` with the
+   same key and receives back the matching room ids and their status
+   (`open`, `closed`, or `stale`).
+3. The replacement then `room_join`s the still-live room, or opens a
+   fresh one if no live match exists.
+
 ## What's not yet supported
 
 - **Per-user authentication.** One token per server. A user-aware auth
   model is on the plan.
-- **Workspace namespacing.** A planned `X-Neural-Workspace` header will
-  isolate room IDs across teams sharing one server. Not implemented yet.
-  Until it lands, deterministic room IDs (`nlr-*`) on a shared server
-  carry collision risk if teams pick the same string.
 - **TLS in-process.** The server speaks plain HTTP. Front it with
   Caddy / Tailscale / a cloud LB for public exposure.

@@ -44,8 +44,8 @@ The user must have `neural_link_remote` registered. If
 - `participant_id` is namespaced *within* the room — the same id in
   two different rooms is two different participants. So `lead` works
   fine across rooms.
-- If the room was opened with a deterministic id and your participant
-  already joined previously, joining again is idempotent.
+- Joining the same room twice with the same participant id is
+  idempotent — no duplicate participant rows are created.
 - Pass `agent_id` (your Claude Code agent id from
   `${CLAUDE_AGENT_ID}` if available) so the PostToolUse inbox-nudge
   hook can resolve your participant to your session — without it, the
