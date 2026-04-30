@@ -1,0 +1,47 @@
+[Unit]
+Description=neural_link MCP coordination server
+Documentation=https://github.com/your-org/neural_link
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=neural_link
+Group=neural_link
+
+# Adjust to where the erlang-shipment was deployed.
+WorkingDirectory=/opt/neural_link
+
+Environment=NEURAL_LINK_TRANSPORT=http
+Environment=NEURAL_LINK_PORT=9961
+Environment=NEURAL_LINK_DATA_DIR=/var/lib/neural_link
+# Set NEURAL_LINK_AUTH_TOKEN via an EnvironmentFile if exposing beyond a
+# trusted private network. Example:
+#   EnvironmentFile=/etc/neural_link/env
+
+ExecStart=/opt/neural_link/entrypoint.sh run start --foreground
+
+# Hardening — neural_link only writes to its data dir; the rest of the
+# filesystem is treated as read-only.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/neural_link
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+
+# Resource limits — adjust for room/agent volume.
+LimitNOFILE=65536
+
+Restart=on-failure
+RestartSec=5s
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Install]
+WantedBy=multi-user.target

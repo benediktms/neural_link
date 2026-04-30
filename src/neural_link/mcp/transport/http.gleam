@@ -11,7 +11,7 @@ import gleam/int
 import gleam/io
 import gleam/json
 import gleam/list
-import gleam/option.{None}
+import gleam/option.{type Option, None}
 import gleam/otp/actor
 import gleam/string
 import mist.{type Connection, type ResponseData}
@@ -21,6 +21,7 @@ import neural_link/mcp/protocol.{
   type JsonRpcRequest, type ToolDefinition, JsonRpcError,
 }
 import neural_link/mcp/transport.{type ToolCallHandler}
+import neural_link/mcp/transport/auth
 import neural_link/runtime/presence as presence_mod
 import neural_link/runtime/registry as registry_mod
 import neural_link/runtime/room as room_mod
@@ -129,8 +130,9 @@ pub fn start(
   port: Int,
   registry: Subject(registry_mod.RegistryMessage),
   presence: Subject(presence_mod.PresenceMessage),
+  auth_token: Option(String),
 ) -> Nil {
-  case start_server(tools, handler, port, registry, presence) {
+  case start_server(tools, handler, port, registry, presence, auth_token) {
     Error(err) -> {
       io.println_error("Failed to start HTTP server: " <> err)
     }
@@ -149,6 +151,7 @@ pub fn start_server(
   port: Int,
   registry: Subject(registry_mod.RegistryMessage),
   presence: Subject(presence_mod.PresenceMessage),
+  auth_token: Option(String),
 ) -> Result(Subject(SessionMessage), String) {
   case start_session_manager() {
     Error(err) -> Error("Failed to start session manager: " <> err)
@@ -158,7 +161,15 @@ pub fn start_server(
       )
       let assert Ok(_) =
         mist.new(fn(req) {
-          handle_request(req, tools, handler, sessions, registry, presence)
+          handle_request(
+            req,
+            tools,
+            handler,
+            sessions,
+            registry,
+            presence,
+            auth_token,
+          )
         })
         |> mist.port(port)
         |> mist.start
@@ -178,6 +189,50 @@ fn handle_request(
   sessions: Subject(SessionMessage),
   registry: Subject(registry_mod.RegistryMessage),
   presence: Subject(presence_mod.PresenceMessage),
+  auth_token: Option(String),
+) -> response.Response(ResponseData) {
+  case req.method, request.path_segments(req) {
+    http.Get, ["health"] -> health_response()
+    http.Get, ["ready"] -> ready_response(registry)
+    _, _ ->
+      case auth.check(req, auth_token) {
+        Error(failure) -> json_error_response(401, auth.describe(failure))
+        Ok(Nil) ->
+          route_request(req, tools, handler, sessions, registry, presence)
+      }
+  }
+}
+
+fn health_response() -> response.Response(ResponseData) {
+  response.new(200)
+  |> response.set_body(
+    mist.Bytes(bytes_tree.from_string("{\"status\":\"ok\"}")),
+  )
+  |> response.set_header("content-type", "application/json")
+}
+
+fn ready_response(
+  registry: Subject(registry_mod.RegistryMessage),
+) -> response.Response(ResponseData) {
+  let rooms = registry_mod.list_room_ids(registry)
+  let body =
+    json.object([
+      #("status", json.string("ready")),
+      #("rooms", json.int(list.length(rooms))),
+    ])
+    |> json.to_string
+  response.new(200)
+  |> response.set_body(mist.Bytes(bytes_tree.from_string(body)))
+  |> response.set_header("content-type", "application/json")
+}
+
+fn route_request(
+  req: Request(Connection),
+  tools: List(ToolDefinition),
+  handler: ToolCallHandler,
+  sessions: Subject(SessionMessage),
+  registry: Subject(registry_mod.RegistryMessage),
+  presence: Subject(presence_mod.PresenceMessage),
 ) -> response.Response(ResponseData) {
   case req.method, request.path_segments(req) {
     http.Post, ["mcp"] -> handle_mcp_post(req, tools, handler, sessions)
@@ -186,12 +241,6 @@ fn handle_request(
       handle_inbox_count(participant_id, registry, presence)
     http.Get, ["agent", agent_id, "inbox", "count"] ->
       handle_agent_inbox_count(agent_id, registry, presence)
-    http.Get, ["health"] ->
-      response.new(200)
-      |> response.set_body(
-        mist.Bytes(bytes_tree.from_string("{\"status\":\"ok\"}")),
-      )
-      |> response.set_header("content-type", "application/json")
     _, _ -> json_error_response(404, "Not found")
   }
 }

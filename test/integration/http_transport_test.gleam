@@ -1,6 +1,7 @@
 import gleam/erlang/process
 import gleam/int
 import gleam/list
+import gleam/option
 import gleam/string
 import gleeunit/should
 import neural_link/mcp/handlers
@@ -637,6 +638,7 @@ fn start_test_server() -> Int {
       port,
       services.registry,
       services.presence,
+      option.None,
     )
   // Give the server time to bind
   process.sleep(100)

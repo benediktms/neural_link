@@ -1,4 +1,6 @@
 import gleam/int
+import gleam/option.{type Option, None, Some}
+import gleam/string
 
 pub type Transport {
   Http
@@ -23,5 +25,16 @@ pub fn load_port() -> Int {
         Error(_) -> 9961
       }
     Error(_) -> 9961
+  }
+}
+
+pub fn load_auth_token() -> Option(String) {
+  case get_env("NEURAL_LINK_AUTH_TOKEN") {
+    Ok(raw) ->
+      case string.trim(raw) {
+        "" -> None
+        token -> Some(token)
+      }
+    Error(_) -> None
   }
 }

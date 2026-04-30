@@ -74,6 +74,7 @@ fn start_test_server_with_mock() -> #(
       port,
       services.registry,
       services.presence,
+      option.None,
     )
   process.sleep(1000)
   #(port, mock_subject)
@@ -482,6 +483,7 @@ pub fn debug_http_with_mock_actor_test() {
       port,
       services.registry,
       services.presence,
+      option.None,
     )
   process.sleep(1000)
 
