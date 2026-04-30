@@ -131,6 +131,55 @@ pub fn http_auth_unknown_route_requires_auth_test() {
   let assert Ok(#(401, _, _)) = http_get(url, [])
 }
 
+pub fn http_auth_room_lifecycle_under_auth_test() {
+  let port = start_test_server(option.Some("s3cret-token"))
+  let url = "http://localhost:" <> int.to_string(port) <> "/mcp"
+  let auth = #("authorization", "Bearer s3cret-token")
+
+  // Initialize — must succeed with auth
+  let assert Ok(#(200, _, init_headers)) = http_post(url, init_body, [auth])
+  let assert Ok(sid) = http_helpers.find_header(init_headers, "mcp-session-id")
+  let h = [auth, #("mcp-session-id", sid)]
+
+  // Open a room
+  let open_body =
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"room_open\",\"arguments\":{\"title\":\"Authed Lifecycle\",\"participant_id\":\"lead\",\"display_name\":\"Lead\"}}}"
+  let assert Ok(#(200, open_resp, _)) = http_post(url, open_body, h)
+  string.contains(open_resp, "room_id") |> should.be_true
+
+  // Join a member
+  let assert Ok(room_id) =
+    http_helpers.extract_json_string(open_resp, "room_id")
+  let join_body =
+    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"room_join\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"participant_id\":\"member\",\"display_name\":\"Member\"}}}"
+  let assert Ok(#(200, _, _)) = http_post(url, join_body, h)
+
+  // Send a message — verifies tool dispatch under auth
+  let send_body =
+    "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"message_send\",\"arguments\":{\"room_id\":\""
+    <> room_id
+    <> "\",\"from\":\"lead\",\"kind\":\"finding\",\"summary\":\"authed test\"}}}"
+  let assert Ok(#(200, send_resp, _)) = http_post(url, send_body, h)
+  string.contains(send_resp, "_inbox_pending") |> should.be_true
+}
+
+pub fn http_auth_session_alone_insufficient_when_token_set_test() {
+  let port = start_test_server(option.Some("s3cret-token"))
+  let url = "http://localhost:" <> int.to_string(port) <> "/mcp"
+  let auth = #("authorization", "Bearer s3cret-token")
+
+  // Initialize with auth — get a valid session
+  let assert Ok(#(200, _, init_headers)) = http_post(url, init_body, [auth])
+  let assert Ok(sid) = http_helpers.find_header(init_headers, "mcp-session-id")
+
+  // Subsequent call WITHOUT the bearer token but WITH the session id
+  // must still 401. Auth is per-request, not session-bound.
+  let assert Ok(#(401, _, _)) =
+    http_post(url, tools_list_body, [#("mcp-session-id", sid)])
+}
+
 fn start_test_server(auth_token: Option(String)) -> Int {
   let port =
     21_000
