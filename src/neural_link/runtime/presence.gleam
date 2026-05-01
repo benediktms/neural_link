@@ -49,7 +49,11 @@ pub fn start() -> actor.StartResult(Subject(PresenceMessage)) {
   {
     Ok(started) -> {
       actor.send(started.data, SetSelf(started.data))
-      process.send_after(started.data, presence_cleanup_interval_ms, CheckExpired(process.new_subject()))
+      process.send_after(
+        started.data,
+        presence_cleanup_interval_ms,
+        CheckExpired(process.new_subject()),
+      )
       Ok(started)
     }
     Error(e) -> Error(e)
@@ -184,11 +188,9 @@ fn handle_message(
         presence_cleanup_interval_ms,
         CheckExpired(process.new_subject()),
       )
-      actor.continue(PresenceState(
-        ..state,
-        entries: remaining,
-        agent_map: cleaned_agent_map,
-      ))
+      actor.continue(
+        PresenceState(..state, entries: remaining, agent_map: cleaned_agent_map),
+      )
     }
 
     Shutdown -> actor.stop()
