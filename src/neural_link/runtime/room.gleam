@@ -231,21 +231,41 @@ fn handle_message(
           // Store message (prepend), enforce max
           let new_count = state.message_count + 1
           let updated_messages = [msg, ..state.messages]
-          let #(bounded_messages, bounded_receipts) = case
+          let #(bounded_messages, bounded_receipts, bounded_pending) = case
             new_count > state.max_messages
           {
             True -> {
               let kept = list.take(updated_messages, state.max_messages)
-              let evicted =
+              let evicted_ids =
                 list.drop(updated_messages, state.max_messages)
                 |> list.map(fn(m) { message_id_to_string(m.message_id) })
               let pruned =
-                list.fold(evicted, updated_receipts, fn(acc, k) {
+                list.fold(evicted_ids, updated_receipts, fn(acc, k) {
                   dict.delete(acc, k)
                 })
-              #(kept, pruned)
+              // Decrement pending_counts for participants with pending receipts on evicted messages
+              let decremented =
+                list.fold(evicted_ids, updated_pending, fn(counts, msg_id) {
+                  case dict.get(updated_receipts, msg_id) {
+                    Error(_) -> counts
+                    Ok(receipts) ->
+                      list.fold(receipts, counts, fn(c, r) {
+                        case r.status {
+                          message.Pending -> {
+                            let pid = participant_id_to_string(r.participant_id)
+                            case dict.get(c, pid) {
+                              Ok(n) if n > 1 -> dict.insert(c, pid, n - 1)
+                              _ -> dict.delete(c, pid)
+                            }
+                          }
+                          message.Acked -> c
+                        }
+                      })
+                  }
+                })
+              #(kept, pruned, decremented)
             }
-            False -> #(updated_messages, updated_receipts)
+            False -> #(updated_messages, updated_receipts, updated_pending)
           }
           let bounded_count = case new_count > state.max_messages {
             True -> state.max_messages
@@ -260,7 +280,7 @@ fn handle_message(
               receipts: bounded_receipts,
               sequence: new_seq,
               message_count: bounded_count,
-              pending_counts: updated_pending,
+              pending_counts: bounded_pending,
             ),
           )
         }

@@ -1,11 +1,14 @@
+import gleam/dynamic/decode
 import gleam/erlang/process
+import gleam/json
 import gleam/list
-import gleam/option.{None}
+import gleam/option.{None, Some}
 import gleeunit/should
 import neural_link/domain/id.{type RoomId, ParticipantId, RoomId}
 import neural_link/domain/message as message_mod
 import neural_link/domain/participant
 import neural_link/domain/room as domain_room
+import neural_link/mcp/handlers
 import neural_link/persistence/database
 import neural_link/runtime/presence as presence_mod
 import neural_link/runtime/registry as registry_mod
@@ -16,24 +19,42 @@ import neural_link/runtime/supervisor
 // N1: Registry removes room entry after close
 // ---------------------------------------------------------------------------
 
-pub fn n1_registry_removes_room_after_close_test() {
+pub fn n1_registry_deregisters_room_via_handle_room_close_test() {
   let assert Ok(services) = supervisor.start_with_database(database.Memory)
   let registry = services.registry
+  let presence = services.presence
 
+  // Open a room through the registry
   let assert Ok(room) =
     registry_mod.create_room(registry, "Test Room", None, None, [], [], None)
-
   let room_id = room_mod_id_string(room.id)
 
+  // Join a participant (room_close requires a participant to unregister from presence)
   let assert Ok(room_subject) = registry_mod.get_room(registry, room_id)
-
   let p = participant.new("p1", "Alice", participant.Member)
   let assert Ok(_) = room_mod.join(room_subject, p)
-  let assert Ok(_) = room_mod.close_room(room_subject, domain_room.Completed)
+
+  // Build handler and call room_close through it — this exercises handle_room_close
+  let handler =
+    handlers.make_handler_for_testing(
+      handlers.HandlerConfig(
+        registry: registry,
+        inbox: services.inbox,
+        presence: presence,
+        store: services.store,
+      ),
+      fn(_) { None },
+    )
+
+  let args_json =
+    "{\"room_id\":\"" <> room_id <> "\",\"resolution\":\"completed\"}"
+  let assert Ok(args_dynamic) =
+    json.parse(from: args_json, using: decode.dynamic)
+  let assert Ok(_) = handler("room_close", Some(args_dynamic))
+
   process.sleep(50)
 
-  let assert Ok(_) = registry_mod.remove_room(registry, room_id)
-
+  // If remove_room call is deleted from handle_room_close, this assertion fails
   registry_mod.get_room(registry, room_id) |> should.be_error
 }
 
@@ -112,7 +133,7 @@ pub fn n2_receipts_size_equals_messages_below_max_test() {
 }
 
 // ---------------------------------------------------------------------------
-// N3: Presence evicts stale entries on CheckExpired
+// N3: Presence timer fires automatically and evicts stale entries
 // ---------------------------------------------------------------------------
 
 pub fn n3_check_expired_evicts_stale_participants_test() {
@@ -143,20 +164,42 @@ pub fn n3_check_expired_keeps_fresh_participants_test() {
   presence_mod.query_participant(presence, pid) |> should.be_ok
 }
 
-pub fn n3_check_expired_rearming_does_not_crash_test() {
-  let assert Ok(pres_started) = presence_mod.start()
+pub fn n3_periodic_timer_evicts_stale_without_manual_invocation_test() {
+  // start_with_interval arms the periodic timer at 50ms
+  // If the process.send_after calls are removed, the participant is never evicted
+  let assert Ok(pres_started) = presence_mod.start_with_interval(50)
   let presence = pres_started.data
 
-  let pid = ParticipantId("timer-p1")
-  presence_mod.register(presence, pid, "room_z", 1)
-  process.sleep(10)
+  let pid = ParticipantId("timer-evict-p1")
+  // lease_ms = 1 so it expires before the first timer fires
+  presence_mod.register(presence, pid, "room_timer", 1)
 
-  let _expired = presence_mod.check_expired(presence)
-  process.sleep(10)
+  // Wait for two timer cycles (2 × 50ms + buffer)
+  process.sleep(200)
 
-  // A second check_expired call must succeed (timer re-arm does not crash)
-  let _expired2 = presence_mod.check_expired(presence)
-  True |> should.be_true
+  // No manual check_expired — eviction must have come from the periodic timer
+  presence_mod.query_participant(presence, pid) |> should.be_error
+}
+
+pub fn n3_periodic_timer_self_rearms_and_evicts_twice_test() {
+  // Verifies that CheckExpiredPeriodic re-arms: two eviction waves occur
+  let assert Ok(pres_started) = presence_mod.start_with_interval(60)
+  let presence = pres_started.data
+
+  // Register two participants; each will expire before their respective timer cycle
+  let pid1 = ParticipantId("wave1-p1")
+  let pid2 = ParticipantId("wave2-p1")
+  presence_mod.register(presence, pid1, "room_wave", 1)
+
+  // Wait for first cycle
+  process.sleep(120)
+  // pid1 must be gone after first eviction wave
+  presence_mod.query_participant(presence, pid1) |> should.be_error
+
+  // Register pid2 — will be evicted in the second wave
+  presence_mod.register(presence, pid2, "room_wave", 1)
+  process.sleep(180)
+  presence_mod.query_participant(presence, pid2) |> should.be_error
 }
 
 // ---------------------------------------------------------------------------

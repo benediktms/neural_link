@@ -30,7 +30,11 @@ pub type PresenceMessage {
     participant_id: ParticipantId,
     reply: Subject(Result(PresenceEntry, String)),
   )
+  /// Manual eviction check — caller supplies reply subject. Does NOT re-arm timer.
   CheckExpired(reply: Subject(List(String)))
+  /// Internal periodic eviction — sent by the timer. Re-arms on completion.
+  CheckExpiredPeriodic
+  // internal — do not send from outside the actor
   SetSelf(subject: Subject(PresenceMessage))
   RegisterAgent(agent_id: String, participant_id: ParticipantId)
   QueryAgent(agent_id: String, reply: Subject(Result(String, String)))
@@ -38,22 +42,26 @@ pub type PresenceMessage {
 }
 
 pub fn start() -> actor.StartResult(Subject(PresenceMessage)) {
+  start_with_interval(presence_cleanup_interval_ms)
+}
+
+pub fn start_with_interval(
+  interval_ms: Int,
+) -> actor.StartResult(Subject(PresenceMessage)) {
   case
     actor.new(PresenceState(
       entries: dict.new(),
       agent_map: dict.new(),
       self_subject: process.new_subject(),
     ))
-    |> actor.on_message(handle_message)
+    |> actor.on_message(fn(state, msg) {
+      handle_message(state, msg, interval_ms)
+    })
     |> actor.start
   {
     Ok(started) -> {
       actor.send(started.data, SetSelf(started.data))
-      process.send_after(
-        started.data,
-        presence_cleanup_interval_ms,
-        CheckExpired(process.new_subject()),
-      )
+      process.send_after(started.data, interval_ms, CheckExpiredPeriodic)
       Ok(started)
     }
     Error(e) -> Error(e)
@@ -63,6 +71,7 @@ pub fn start() -> actor.StartResult(Subject(PresenceMessage)) {
 fn handle_message(
   state: PresenceState,
   msg: PresenceMessage,
+  interval_ms: Int,
 ) -> actor.Next(PresenceState, PresenceMessage) {
   case msg {
     Register(participant_id, room_id, lease_ms) -> {
@@ -167,27 +176,16 @@ fn handle_message(
     }
 
     CheckExpired(reply) -> {
-      let now = birl.to_unix_milli(birl.utc_now())
-      let #(expired, remaining) =
-        dict.fold(state.entries, #([], dict.new()), fn(acc, key, entry) {
-          let #(exp_acc, rem_acc) = acc
-          case now - entry.last_seen > entry.lease_ms {
-            True -> #([key, ..exp_acc], rem_acc)
-            False -> #(exp_acc, dict.insert(rem_acc, key, entry))
-          }
-        })
-      // Clean agent_map for expired participants
-      let cleaned_agent_map =
-        list.fold(expired, state.agent_map, fn(am, pid) {
-          purge_agent_entries(am, pid)
-        })
+      let #(expired, remaining, cleaned_agent_map) = do_evict(state)
       process.send(reply, expired)
-      // Re-arm periodic cleanup
-      process.send_after(
-        state.self_subject,
-        presence_cleanup_interval_ms,
-        CheckExpired(process.new_subject()),
+      actor.continue(
+        PresenceState(..state, entries: remaining, agent_map: cleaned_agent_map),
       )
+    }
+
+    CheckExpiredPeriodic -> {
+      let #(_expired, remaining, cleaned_agent_map) = do_evict(state)
+      process.send_after(state.self_subject, interval_ms, CheckExpiredPeriodic)
       actor.continue(
         PresenceState(..state, entries: remaining, agent_map: cleaned_agent_map),
       )
@@ -195,6 +193,25 @@ fn handle_message(
 
     Shutdown -> actor.stop()
   }
+}
+
+fn do_evict(
+  state: PresenceState,
+) -> #(List(String), Dict(String, PresenceEntry), Dict(String, String)) {
+  let now = birl.to_unix_milli(birl.utc_now())
+  let #(expired, remaining) =
+    dict.fold(state.entries, #([], dict.new()), fn(acc, key, entry) {
+      let #(exp_acc, rem_acc) = acc
+      case now - entry.last_seen > entry.lease_ms {
+        True -> #([key, ..exp_acc], rem_acc)
+        False -> #(exp_acc, dict.insert(rem_acc, key, entry))
+      }
+    })
+  let cleaned_agent_map =
+    list.fold(expired, state.agent_map, fn(am, pid) {
+      purge_agent_entries(am, pid)
+    })
+  #(expired, remaining, cleaned_agent_map)
 }
 
 /// Remove all agent_map entries pointing to the given participant_id

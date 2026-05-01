@@ -872,6 +872,8 @@ fn handle_room_close(
       persistence_plugin.RoomClosed(closed_room, message_count, duration_ms),
     )
   })
+  // TODO: race window — a concurrent room_open with the same room_id may receive
+  // AlreadyExisted pointing at the now-closed actor between close_room and remove_room.
   // Deregister from registry after persistence — failure is non-fatal
   case registry_mod.remove_room(registry, room_id) {
     Ok(_) -> Nil
