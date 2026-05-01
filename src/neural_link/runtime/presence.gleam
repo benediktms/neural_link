@@ -10,11 +10,14 @@ pub type PresenceEntry {
   PresenceEntry(rooms: List(String), last_seen: Int, lease_ms: Int)
 }
 
+const presence_cleanup_interval_ms = 60_000
+
 type PresenceState {
   PresenceState(
     entries: Dict(String, PresenceEntry),
     /// Maps Claude Code agent_id → participant_id string
     agent_map: Dict(String, String),
+    self_subject: Subject(PresenceMessage),
   )
 }
 
@@ -28,15 +31,29 @@ pub type PresenceMessage {
     reply: Subject(Result(PresenceEntry, String)),
   )
   CheckExpired(reply: Subject(List(String)))
+  SetSelf(subject: Subject(PresenceMessage))
   RegisterAgent(agent_id: String, participant_id: ParticipantId)
   QueryAgent(agent_id: String, reply: Subject(Result(String, String)))
   Shutdown
 }
 
 pub fn start() -> actor.StartResult(Subject(PresenceMessage)) {
-  actor.new(PresenceState(entries: dict.new(), agent_map: dict.new()))
-  |> actor.on_message(handle_message)
-  |> actor.start
+  case
+    actor.new(PresenceState(
+      entries: dict.new(),
+      agent_map: dict.new(),
+      self_subject: process.new_subject(),
+    ))
+    |> actor.on_message(handle_message)
+    |> actor.start
+  {
+    Ok(started) -> {
+      actor.send(started.data, SetSelf(started.data))
+      process.send_after(started.data, presence_cleanup_interval_ms, CheckExpired(process.new_subject()))
+      Ok(started)
+    }
+    Error(e) -> Error(e)
+  }
 }
 
 fn handle_message(
@@ -89,6 +106,7 @@ fn handle_message(
               actor.continue(PresenceState(
                 entries: entries,
                 agent_map: agent_map,
+                self_subject: state.self_subject,
               ))
             }
             _ -> {
@@ -126,6 +144,10 @@ fn handle_message(
       actor.continue(state)
     }
 
+    SetSelf(subject) -> {
+      actor.continue(PresenceState(..state, self_subject: subject))
+    }
+
     RegisterAgent(agent_id, participant_id) -> {
       let pid_str = participant_id_to_string(participant_id)
       let agent_map = dict.insert(state.agent_map, agent_id, pid_str)
@@ -140,7 +162,6 @@ fn handle_message(
       actor.continue(state)
     }
 
-    // TODO: v2 — add periodic timer to call CheckExpired and remove stale participants
     CheckExpired(reply) -> {
       let now = birl.to_unix_milli(birl.utc_now())
       let #(expired, remaining) =
@@ -157,7 +178,14 @@ fn handle_message(
           purge_agent_entries(am, pid)
         })
       process.send(reply, expired)
+      // Re-arm periodic cleanup
+      process.send_after(
+        state.self_subject,
+        presence_cleanup_interval_ms,
+        CheckExpired(process.new_subject()),
+      )
       actor.continue(PresenceState(
+        ..state,
         entries: remaining,
         agent_map: cleaned_agent_map,
       ))

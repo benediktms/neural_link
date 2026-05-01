@@ -872,6 +872,15 @@ fn handle_room_close(
       persistence_plugin.RoomClosed(closed_room, message_count, duration_ms),
     )
   })
+  // Deregister from registry after persistence — failure is non-fatal
+  case registry_mod.remove_room(registry, room_id) {
+    Ok(_) -> Nil
+    Error(e) ->
+      logging.log(
+        logging.Warning,
+        "registry remove_room failed after close: " <> e,
+      )
+  }
   // Compute compliance if interaction mode is set
   let compliance_fields = case room_state.interaction_mode {
     Some(mode) -> {

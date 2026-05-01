@@ -85,6 +85,7 @@ pub type RoomMessage {
   )
   CloseRoom(resolution: RoomResolution, reply: Subject(Result(Nil, String)))
   GetState(reply: Subject(Room))
+  GetReceiptsSize(reply: Subject(Int))
   Shutdown
 }
 
@@ -93,13 +94,20 @@ pub type RoomMessage {
 // ---------------------------------------------------------------------------
 
 pub fn start(room_data: Room) -> actor.StartResult(Subject(RoomMessage)) {
+  start_with_max_messages(room_data, 1000)
+}
+
+pub fn start_with_max_messages(
+  room_data: Room,
+  max_messages: Int,
+) -> actor.StartResult(Subject(RoomMessage)) {
   let state =
     RoomState(
       room: room_data,
       messages: [],
       receipts: dict.new(),
       sequence: 0,
-      max_messages: 1000,
+      max_messages: max_messages,
       message_count: 0,
       pending_counts: dict.new(),
       drain_callbacks: dict.new(),
@@ -107,6 +115,10 @@ pub fn start(room_data: Room) -> actor.StartResult(Subject(RoomMessage)) {
   actor.new(state)
   |> actor.on_message(handle_message)
   |> actor.start
+}
+
+pub fn get_receipts_size(room: Subject(RoomMessage)) -> Int {
+  actor.call(room, 5000, fn(reply) { GetReceiptsSize(reply) })
 }
 
 // ---------------------------------------------------------------------------
@@ -219,9 +231,21 @@ fn handle_message(
           // Store message (prepend), enforce max
           let new_count = state.message_count + 1
           let updated_messages = [msg, ..state.messages]
-          let bounded_messages = case new_count > state.max_messages {
-            True -> list.take(updated_messages, state.max_messages)
-            False -> updated_messages
+          let #(bounded_messages, bounded_receipts) = case
+            new_count > state.max_messages
+          {
+            True -> {
+              let kept = list.take(updated_messages, state.max_messages)
+              let evicted =
+                list.drop(updated_messages, state.max_messages)
+                |> list.map(fn(m) { message_id_to_string(m.message_id) })
+              let pruned =
+                list.fold(evicted, updated_receipts, fn(acc, k) {
+                  dict.delete(acc, k)
+                })
+              #(kept, pruned)
+            }
+            False -> #(updated_messages, updated_receipts)
           }
           let bounded_count = case new_count > state.max_messages {
             True -> state.max_messages
@@ -233,7 +257,7 @@ fn handle_message(
             RoomState(
               ..state,
               messages: bounded_messages,
-              receipts: updated_receipts,
+              receipts: bounded_receipts,
               sequence: new_seq,
               message_count: bounded_count,
               pending_counts: updated_pending,
@@ -472,6 +496,12 @@ fn handle_message(
     // -----------------------------------------------------------------------
     GetState(reply) -> {
       actor.send(reply, state.room)
+      actor.continue(state)
+    }
+
+    // -----------------------------------------------------------------------
+    GetReceiptsSize(reply) -> {
+      actor.send(reply, dict.size(state.receipts))
       actor.continue(state)
     }
 
