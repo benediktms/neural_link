@@ -99,6 +99,55 @@ alias c := check
 # ── Hooks ──────────────────────────────────────
 
 [group('setup')]
+install-skills:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    SKILLS_SRC="{{justfile_directory()}}/skills/neural_link"
+    AGENTS_SRC="{{justfile_directory()}}/agents"
+    SKILLS_DST="$HOME/.claude/skills/neural_link"
+    AGENTS_DST="$HOME/.claude/agents"
+    mkdir -p "$SKILLS_DST" "$AGENTS_DST"
+    # Symlink each skill directory so edits to source files take effect immediately
+    for skill_dir in "$SKILLS_SRC"/*/; do
+      [ -d "$skill_dir" ] || continue
+      name=$(basename "$skill_dir")
+      ln -sfn "$skill_dir" "$SKILLS_DST/$name"
+      echo "✓ Skill linked: $name"
+    done
+    # Symlink each agent definition
+    for agent_md in "$AGENTS_SRC"/*.md; do
+      [ -f "$agent_md" ] || continue
+      name=$(basename "$agent_md")
+      ln -sfn "$agent_md" "$AGENTS_DST/$name"
+      echo "✓ Agent linked: $name"
+    done
+    echo "  Skills: $SKILLS_DST"
+    echo "  Agents: $AGENTS_DST"
+
+[group('setup')]
+uninstall-skills:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    SKILLS_DST="$HOME/.claude/skills/neural_link"
+    AGENTS_DST="$HOME/.claude/agents"
+    AGENTS_SRC="{{justfile_directory()}}/agents"
+    if [ -d "$SKILLS_DST" ]; then
+      rm -rf "$SKILLS_DST"
+      echo "✓ Removed: $SKILLS_DST"
+    fi
+    if [ -d "$AGENTS_DST" ]; then
+      for agent_md in "$AGENTS_SRC"/*.md; do
+        [ -f "$agent_md" ] || continue
+        name=$(basename "$agent_md")
+        target="$AGENTS_DST/$name"
+        if [ -L "$target" ]; then
+          rm "$target"
+          echo "✓ Unlinked: $name"
+        fi
+      done
+    fi
+
+[group('setup')]
 install-hooks:
     #!/usr/bin/env bash
     set -euo pipefail

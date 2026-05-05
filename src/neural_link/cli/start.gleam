@@ -36,6 +36,7 @@ fn run_foreground() -> Nil {
             config.load_port(),
             services.registry,
             services.presence,
+            config.load_auth_token(),
           )
         config.Stdio -> stdio_transport.start(tool_defs, handler)
       }

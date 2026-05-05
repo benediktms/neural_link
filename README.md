@@ -162,6 +162,39 @@ To install the local binary wrapper and register the MCP endpoint with Claude:
 just install
 ```
 
+## Remote Deployment
+
+`neural_link` can run as a shared service so agents on different
+machines and different Claude Code sessions can coordinate through
+the same rooms.
+
+- **[`deploy/README.md`](./deploy/README.md)** — server-side
+  deployment: Dockerfile, docker-compose, systemd unit, and recipes
+  for Tailscale / LAN port-forward / public host topologies.
+- **[`docs/REMOTE.md`](./docs/REMOTE.md)** — client-side: registering
+  a remote `neural_link` MCP server in Claude Code, bearer token
+  setup, and verifying the connection.
+
+The server speaks the same MCP protocol over stdio and HTTP, so the
+binary deployed to a remote host is the same one `just run` boots
+locally. Bearer-token auth (`NEURAL_LINK_AUTH_TOKEN`) is opt-in and
+gates everything except `/health` and `/ready`.
+
+### Skills for the remote-room workflow
+
+`skills/` ships Claude Code skills that wrap the remote MCP tools
+ergonomically: `/remote-room-open`, `/remote-room-join`,
+`/send-message`, `/reply`, and `/coordinator` (which spawns a teammate
+that bridges remote-room messages into local inbox nudges). Install
+with:
+
+```bash
+just install-skills
+```
+
+See [`skills/README.md`](./skills/README.md) for the full suite and
+the headline workflow.
+
 ## Example Flow
 
 ```text
@@ -189,11 +222,12 @@ just install
 ## Current Limits
 
 - Single-node runtime only; distributed rooms are not implemented
-- No authentication or authorization layer
+- Auth is a single shared bearer token per server — no per-user identity, no ACLs
+- Room IDs are always server-generated; for cross-process reconnect, set `external_ref` at open time and look up via `room_find_by_external_ref`
 - No message editing or encryption
 - `thread_summarize` is extractive, not LLM-generated
 - `wait_for` timeout handling is enforced at the MCP layer, not inside the room actor
-- SSE transport is not implemented
+- SSE transport is not implemented; HTTP transport is JSON-RPC over POST
 
 ## License
 

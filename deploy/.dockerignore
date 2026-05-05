@@ -1,0 +1,15 @@
+build/
+test/
+.git/
+.github/
+.claude/
+**/*.md
+!gleam.toml
+!manifest.toml
+deploy/
+docs/
+scripts/
+.sisyphus/
+erl_crash.dump
+*.dump
+.DS_Store

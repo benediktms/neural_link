@@ -2,6 +2,7 @@ import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/int
 import gleam/list
+import gleam/option
 import gleeunit/should
 import neural_link/mcp/handlers
 import neural_link/mcp/tools
@@ -187,6 +188,7 @@ pub fn full_room_lifecycle_sqlite_test() {
       port,
       services.registry,
       services.presence,
+      option.None,
     )
   process.sleep(100)
 
